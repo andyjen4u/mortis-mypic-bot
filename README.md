@@ -140,7 +140,16 @@ AUTO_REPLY_DMS=true
 AUTO_REPLY_COOLDOWN_SECONDS=10
 ```
 
-在 Discord 使用 `/mypic-settings` 可查看或修改當前範圍的模式及積極度。
+在 Discord 使用以下子指令查看或修改設定：
+
+```text
+/mypic-settings status
+/mypic-settings always
+/mypic-settings auto activity:<low|medium|high>
+/mypic-settings off
+```
+
+只有 `auto` 模式需要選擇積極度。
 伺服器內按頻道保存，修改需要「管理訊息」權限；私訊則按使用者保存。
 
 自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用

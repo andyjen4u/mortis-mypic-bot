@@ -76,3 +76,26 @@ def should_post_choice(
     if confidence < threshold:
         return False, f"confidence_below_{threshold:.2f}"
     return True, "auto_threshold_passed"
+
+
+def policy_summary(scope_label: str, mode: str, activity: str) -> str:
+    mode = normalize_mode(mode)
+    mode_labels = {
+        "always": "每則都回圖",
+        "auto": "智慧判斷",
+        "off": "關閉自動回圖",
+    }
+    if mode == "auto":
+        activity_labels = {
+            "low": "低",
+            "medium": "中",
+            "high": "高",
+        }
+        activity = normalize_activity(activity)
+        detail = f"，積極度「{activity_labels[activity]}」"
+    else:
+        detail = ""
+    return (
+        f"{scope_label}：{mode_labels[mode]}{detail}。"
+        "被提及及 `/mypic` 仍一定選圖。"
+    )

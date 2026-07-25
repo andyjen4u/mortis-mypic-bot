@@ -3,6 +3,7 @@ import unittest
 from mypic_bot.policy import (
     activity_threshold,
     is_low_signal_message,
+    policy_summary,
     should_post_choice,
 )
 
@@ -53,6 +54,11 @@ class ReplyPolicyTests(unittest.TestCase):
         )
         self.assertTrue(post)
         self.assertEqual(reason, "mode_always")
+
+    def test_only_auto_summary_includes_activity(self):
+        self.assertIn("積極度「高」", policy_summary("這個頻道", "auto", "high"))
+        self.assertNotIn("積極度", policy_summary("這個頻道", "always", "low"))
+        self.assertNotIn("積極度", policy_summary("這個頻道", "off", "high"))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from dataclasses import replace
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import discord
@@ -24,7 +24,7 @@ from .decision_log import append_decision
 from .embeddings import SemanticIndex, meme_retrieval_queries, request_embeddings
 from .images import download_one
 from .llm import CandidateChoice, choose_candidate
-from .policy import is_low_signal_message, should_post_choice
+from .policy import is_low_signal_message, policy_summary, should_post_choice
 from .reranker import credible_rerank_results, rerank_candidates
 
 
@@ -633,84 +633,99 @@ def build_client(settings: Settings) -> MyPicClient:
             file=discord.File(path, filename=path.name),
         )
 
-    @client.tree.command(
+    settings_group = app_commands.Group(
         name="mypic-settings",
         description="設定這個頻道或私訊的自動梗圖模式",
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(
+    app_commands.allowed_installs(guilds=True, users=True)(settings_group)
+    app_commands.allowed_contexts(
         guilds=True,
         dms=True,
         private_channels=True,
-    )
+    )(settings_group)
+
+    async def settings_scope(
+        interaction: discord.Interaction,
+        require_permission: bool,
+    ) -> tuple[str, int, str] | None:
+        if interaction.guild is not None:
+            permissions = getattr(interaction.user, "guild_permissions", None)
+            if require_permission and (
+                permissions is None or not permissions.manage_messages
+            ):
+                await interaction.response.send_message(
+                    "需要「管理訊息」權限才能修改這個頻道的設定。",
+                    ephemeral=True,
+                )
+                return None
+            return "channel", interaction.channel_id, "這個頻道"
+        return "user", interaction.user.id, "你的私訊"
+
+    def current_policy(scope_type: str, scope_id: int) -> tuple[str, str]:
+        stored = get_reply_policy(client.connection, scope_type, scope_id)
+        if stored is not None:
+            return stored["mode"], stored["activity"]
+        return client.settings.auto_reply_mode, client.settings.auto_reply_activity
+
+    async def save_policy(
+        interaction: discord.Interaction,
+        mode: str,
+        activity: str | None = None,
+    ) -> None:
+        scope = await settings_scope(interaction, require_permission=True)
+        if scope is None:
+            return
+        scope_type, scope_id, scope_label = scope
+        _current_mode, current_activity = current_policy(scope_type, scope_id)
+        selected_activity = activity or current_activity
+        set_reply_policy(
+            client.connection,
+            scope_type,
+            scope_id,
+            mode,
+            selected_activity,
+        )
+        await interaction.response.send_message(
+            policy_summary(scope_label, mode, selected_activity),
+            ephemeral=True,
+        )
+
+    @settings_group.command(name="status", description="查看目前的自動回圖設定")
+    async def mypic_settings_status(interaction: discord.Interaction):
+        scope = await settings_scope(interaction, require_permission=False)
+        if scope is None:
+            return
+        scope_type, scope_id, scope_label = scope
+        mode, activity = current_policy(scope_type, scope_id)
+        await interaction.response.send_message(
+            policy_summary(scope_label, mode, activity),
+            ephemeral=True,
+        )
+
+    @settings_group.command(name="always", description="每一則一般訊息都回圖")
+    async def mypic_settings_always(interaction: discord.Interaction):
+        await save_policy(interaction, "always")
+
+    @settings_group.command(name="auto", description="由 Bot 評估是否適合插梗圖")
     @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="每則都回圖", value="always"),
-            app_commands.Choice(name="智慧判斷", value="auto"),
-            app_commands.Choice(name="關閉自動回圖", value="off"),
-        ],
         activity=[
             app_commands.Choice(name="低：很有梗才插話", value="low"),
             app_commands.Choice(name="中：一般積極度", value="medium"),
             app_commands.Choice(name="高：較常插話", value="high"),
         ],
     )
-    @app_commands.describe(
-        mode="自動回圖模式；不填則保留目前設定",
-        activity="智慧判斷的積極程度；不填則保留目前設定",
-    )
-    async def mypic_settings(
+    @app_commands.describe(activity="智慧判斷的積極程度")
+    async def mypic_settings_auto(
         interaction: discord.Interaction,
-        mode: Optional[app_commands.Choice[str]] = None,
-        activity: Optional[app_commands.Choice[str]] = None,
+        activity: app_commands.Choice[str],
     ):
-        if interaction.guild is not None:
-            permissions = getattr(interaction.user, "guild_permissions", None)
-            if permissions is None or not permissions.manage_messages:
-                await interaction.response.send_message(
-                    "需要「管理訊息」權限才能修改這個頻道的設定。",
-                    ephemeral=True,
-                )
-                return
-            scope_type, scope_id = "channel", interaction.channel_id
-            scope_label = "這個頻道"
-        else:
-            scope_type, scope_id = "user", interaction.user.id
-            scope_label = "你的私訊"
-        stored = get_reply_policy(client.connection, scope_type, scope_id)
-        current_mode = (
-            stored["mode"] if stored is not None else client.settings.auto_reply_mode
-        )
-        current_activity = (
-            stored["activity"]
-            if stored is not None
-            else client.settings.auto_reply_activity
-        )
-        new_mode = mode.value if mode is not None else current_mode
-        new_activity = activity.value if activity is not None else current_activity
-        if mode is not None or activity is not None:
-            set_reply_policy(
-                client.connection,
-                scope_type,
-                scope_id,
-                new_mode,
-                new_activity,
-            )
-        mode_labels = {
-            "always": "每則都回圖",
-            "auto": "智慧判斷",
-            "off": "關閉自動回圖",
-        }
-        activity_labels = {
-            "low": "低",
-            "medium": "中",
-            "high": "高",
-        }
-        await interaction.response.send_message(
-            f"{scope_label}：{mode_labels[new_mode]}，積極度"
-            f"「{activity_labels[new_activity]}」。被提及及 `/mypic` 仍一定選圖。",
-            ephemeral=True,
-        )
+        await save_policy(interaction, "auto", activity.value)
+
+    @settings_group.command(name="off", description="關閉一般訊息的自動回圖")
+    async def mypic_settings_off(interaction: discord.Interaction):
+        await save_policy(interaction, "off")
+
+    client.tree.add_command(settings_group)
 
     return client
 

@@ -185,6 +185,25 @@ class SemanticIndex:
         per_query_limit: int = 4,
         total_limit: int = 12,
     ):
+        return [
+            (entry, score)
+            for entry, score, _query_index, _query_rank in (
+                self.diverse_search_entries_detailed(
+                    connection,
+                    query_vectors,
+                    per_query_limit,
+                    total_limit,
+                )
+            )
+        ]
+
+    def diverse_search_entries_detailed(
+        self,
+        connection,
+        query_vectors: np.ndarray,
+        per_query_limit: int = 4,
+        total_limit: int = 12,
+    ):
         ranked_lists = [
             self.search_entries(connection, vector, per_query_limit)
             for vector in query_vectors
@@ -192,7 +211,7 @@ class SemanticIndex:
         results = []
         seen = set()
         for rank in range(per_query_limit):
-            for ranked in ranked_lists:
+            for query_index, ranked in enumerate(ranked_lists):
                 if rank >= len(ranked):
                     continue
                 entry, score = ranked[rank]
@@ -200,7 +219,7 @@ class SemanticIndex:
                 if segment_id in seen:
                     continue
                 seen.add(segment_id)
-                results.append((entry, score))
+                results.append((entry, score, query_index, rank))
                 if len(results) >= total_limit:
                     return results
         return results

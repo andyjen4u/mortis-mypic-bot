@@ -127,6 +127,33 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用
 **Message Content Intent**。
 
+## 分析選圖原因
+
+每次選圖會在本機追加一筆 JSONL 決策紀錄，預設位置是：
+
+```text
+/var/lib/mortis-bot/decisions.jsonl
+```
+
+每筆紀錄包含：
+
+- 使用者原始訊息與 Discord 訊息／頻道識別碼
+- 四個語意檢索查詢
+- 12 張候選圖的字幕、segment ID、語意相似度、檢索角度與該角度名次
+- 重排模型選擇的候選編號
+- 模型提供的簡短理由、幽默手法與信心值
+- 最後傳送的本機圖片路徑
+
+這是可供稽核的決策摘要，不是模型不可驗證的內部逐步思考。紀錄包含使用者
+訊息，Linux 上會以 `0600` 權限建立；如不需要可設定
+`DECISION_LOG_ENABLED=false`，或以 `DECISION_LOG_PATH` 指定其他位置。
+
+查看最新一筆：
+
+```bash
+tail -n 1 /var/lib/mortis-bot/decisions.jsonl | python -m json.tool
+```
+
 ## Discord 安裝模式
 
 Discord Developer Portal 的 Installation 設定需同時啟用：

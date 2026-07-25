@@ -93,9 +93,12 @@ async def run_query(
             f"text={entry['text']}"
         )
     if rerank:
-        selected = await choose_candidate(settings, query, candidates)
-        print(f"LLM_SELECTED={selected}")
-        print(f"SELECTED_TEXT={candidates[selected]['text']}")
+        choice = await choose_candidate(settings, query, candidates)
+        print(f"LLM_SELECTED={choice.index}")
+        print(f"LLM_REASON={choice.reason}")
+        print(f"LLM_HUMOR_STYLE={choice.humor_style}")
+        print(f"LLM_CONFIDENCE={choice.confidence:.2f}")
+        print(f"SELECTED_TEXT={candidates[choice.index]['text']}")
     connection.close()
 
 

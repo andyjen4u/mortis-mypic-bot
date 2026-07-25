@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,11 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.auto_reply_guild_mentions_only)
         self.assertEqual(settings.auto_reply_channel_ids, frozenset())
         self.assertEqual(settings.auto_reply_cooldown_seconds, 10.0)
+        self.assertTrue(settings.decision_log_enabled)
+        self.assertEqual(
+            settings.decision_log_path,
+            settings.data_dir / "decisions.jsonl",
+        )
 
     def test_auto_reply_channel_ids_and_boolean_values(self):
         environment = {
@@ -22,6 +28,8 @@ class SettingsTests(unittest.TestCase):
             "AUTO_REPLY_GUILD_MENTIONS_ONLY": "false",
             "AUTO_REPLY_CHANNEL_IDS": "123, 456",
             "AUTO_REPLY_COOLDOWN_SECONDS": "2.5",
+            "DECISION_LOG_ENABLED": "false",
+            "DECISION_LOG_PATH": "/tmp/mortis-decisions.jsonl",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings.from_env()
@@ -30,6 +38,11 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.auto_reply_guild_mentions_only)
         self.assertEqual(settings.auto_reply_channel_ids, frozenset({123, 456}))
         self.assertEqual(settings.auto_reply_cooldown_seconds, 2.5)
+        self.assertFalse(settings.decision_log_enabled)
+        self.assertEqual(
+            settings.decision_log_path,
+            Path("/tmp/mortis-decisions.jsonl"),
+        )
 
 
 if __name__ == "__main__":

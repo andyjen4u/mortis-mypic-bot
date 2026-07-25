@@ -1,14 +1,58 @@
+from dataclasses import dataclass
 import json
 import re
-
-import httpx
 
 from .config import Settings
 
 
-async def choose_candidate(settings: Settings, query: str, candidates) -> int:
+@dataclass(frozen=True)
+class CandidateChoice:
+    index: int
+    reason: str
+    humor_style: str
+    confidence: float
+
+
+def parse_candidate_choice(content: str, candidate_count: int) -> CandidateChoice:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        result = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise RuntimeError(
+                f"LLM did not return a choice JSON object; content={content!r}"
+            )
+        result = json.loads(match.group(0))
+
+    index = int(result["index"])
+    if not 0 <= index < candidate_count:
+        index = 0
+    return CandidateChoice(
+        index=index,
+        reason=str(result.get("reason", "")).strip(),
+        humor_style=str(result.get("humor_style", "unknown")).strip() or "unknown",
+        confidence=min(1.0, max(0.0, float(result.get("confidence", 0.0)))),
+    )
+
+
+async def choose_candidate(
+    settings: Settings,
+    query: str,
+    candidates,
+) -> CandidateChoice:
+    import httpx
+
     if not settings.llm_base_url or not settings.llm_model:
-        return 0
+        return CandidateChoice(
+            index=0,
+            reason="未設定重排模型，使用檢索排序第一名。",
+            humor_style="retrieval_fallback",
+            confidence=0.0,
+        )
 
     candidate_text = "\n".join(
         f"{index}: {row['text']}" for index, row in enumerate(candidates)
@@ -20,8 +64,9 @@ async def choose_candidate(settings: Settings, query: str, candidates) -> int:
         "優先考慮吐槽、反諷、荒謬反差、誇張反應、冷面笑匠或朋友間欠揍的"
         "幽默。台詞必須能作為對使用者訊息的回應，而不是單純重述它。"
         "避免仇恨、歧視或惡意人身攻擊；若訊息涉及真實危機，選擇較溫和的"
-        "幽默。只輸出 JSON，格式為"
-        '{"index": 整數}。\n\n'
+        "幽默。請提供一個簡短、可供事後稽核的選擇理由，不要輸出逐步思考"
+        "或冗長分析。只輸出 JSON，包含 index、reason、humor_style、"
+        "confidence。\n\n"
         f"使用者訊息：{query}\n\n候選：\n{candidate_text}"
     )
     headers = {"Content-Type": "application/json"}
@@ -45,9 +90,32 @@ async def choose_candidate(settings: Settings, query: str, candidates) -> int:
                             "type": "integer",
                             "minimum": 0,
                             "maximum": len(candidates) - 1,
-                        }
+                        },
+                        "reason": {"type": "string"},
+                        "humor_style": {
+                            "type": "string",
+                            "enum": [
+                                "sarcasm",
+                                "absurd_contrast",
+                                "exaggeration",
+                                "deadpan",
+                                "schadenfreude",
+                                "gentle",
+                                "other",
+                            ],
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                        },
                     },
-                    "required": ["index"],
+                    "required": [
+                        "index",
+                        "reason",
+                        "humor_style",
+                        "confidence",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -60,10 +128,4 @@ async def choose_candidate(settings: Settings, query: str, candidates) -> int:
         response.raise_for_status()
     message = response.json()["choices"][0]["message"]
     content = (message.get("content") or "").strip()
-    match = re.search(r"\{[^{}]*\"index\"\s*:\s*-?\d+[^{}]*\}", content)
-    if not match:
-        raise RuntimeError(
-            f"LLM did not return an index JSON object; content={content!r}"
-        )
-    index = int(json.loads(match.group(0))["index"])
-    return index if 0 <= index < len(candidates) else 0
+    return parse_candidate_choice(content, len(candidates))

@@ -90,6 +90,19 @@ class DatabaseTests(unittest.TestCase):
                 limit=1,
             )
             self.assertEqual(results[0][0]["segment_id"], 2)
+            detailed = index.diverse_search_entries_detailed(
+                connection,
+                np.asarray([[0.1, 0.9], [0.9, 0.1]], dtype=np.float32),
+                per_query_limit=1,
+                total_limit=2,
+            )
+            self.assertEqual(
+                [
+                    (entry["segment_id"], query_index, query_rank)
+                    for entry, _score, query_index, query_rank in detailed
+                ],
+                [(2, 0, 0), (1, 1, 0)],
+            )
             connection.close()
 
 

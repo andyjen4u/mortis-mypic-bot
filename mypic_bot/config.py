@@ -38,6 +38,8 @@ class Settings:
     auto_reply_guild_mentions_only: bool
     auto_reply_channel_ids: frozenset[int]
     auto_reply_cooldown_seconds: float
+    decision_log_enabled: bool
+    decision_log_path_override: Optional[Path]
     data_dir: Path
     llm_base_url: str
     llm_api_key: str
@@ -66,6 +68,12 @@ class Settings:
             auto_reply_cooldown_seconds=max(
                 0.0,
                 float(os.getenv("AUTO_REPLY_COOLDOWN_SECONDS", "10")),
+            ),
+            decision_log_enabled=_bool("DECISION_LOG_ENABLED", True),
+            decision_log_path_override=(
+                Path(os.environ["DECISION_LOG_PATH"])
+                if os.getenv("DECISION_LOG_PATH", "").strip()
+                else None
             ),
             data_dir=Path(os.getenv("DATA_DIR", "/var/lib/mortis-bot")),
             llm_base_url=os.getenv("LLM_BASE_URL", "").rstrip("/"),
@@ -101,3 +109,7 @@ class Settings:
     @property
     def images_dir(self) -> Path:
         return self.data_dir / "images"
+
+    @property
+    def decision_log_path(self) -> Path:
+        return self.decision_log_path_override or self.data_dir / "decisions.jsonl"

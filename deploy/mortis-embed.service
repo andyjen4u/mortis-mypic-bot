@@ -1,0 +1,19 @@
+[Unit]
+Description=Build missing Mortis Bot subtitle embeddings
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mortisbot
+Group=mortisbot
+WorkingDirectory=/opt/mortis-bot
+EnvironmentFile=/etc/mortis-bot.env
+ExecStart=/opt/mortis-bot/.venv/bin/mortis-data embed --batch-size 16
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mortis-bot
+

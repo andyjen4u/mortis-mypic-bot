@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Local working and generated data
+work/
+outputs/
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.webp
+
+# Deployment secrets
+deploy/mortis-bot.env
+
+# Keys and certificates
+*.pem
+*.key
+*_ed25519
+id_rsa
+id_ed25519

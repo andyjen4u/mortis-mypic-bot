@@ -1,0 +1,2 @@
+"""Mortis MyPic Discord bot."""
+

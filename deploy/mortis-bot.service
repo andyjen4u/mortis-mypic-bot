@@ -1,0 +1,23 @@
+[Unit]
+Description=Mortis MyPic Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mortisbot
+Group=mortisbot
+WorkingDirectory=/opt/mortis-bot
+EnvironmentFile=/etc/mortis-bot.env
+ExecStart=/opt/mortis-bot/.venv/bin/mortis-bot
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mortis-bot
+
+[Install]
+WantedBy=multi-user.target
+

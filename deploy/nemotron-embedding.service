@@ -1,0 +1,17 @@
+[Unit]
+Description=Nemotron embedding server on GTX 1060
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CUDA_VISIBLE_DEVICES=1
+Environment=LD_LIBRARY_PATH=/opt/llama.cpp-embed/build-embed/bin
+ExecStart=/opt/llama.cpp-embed/build-embed/bin/llama-server -m /opt/models/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF/nemotron-3-embed-1b-q4_k_m.gguf --host 192.168.10.102 --port 8081 --embedding --pooling mean -c 4096 -ngl 99 -np 1 -b 1024 -ub 1024
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

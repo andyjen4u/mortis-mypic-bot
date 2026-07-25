@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS entry_embeddings (
     dimensions INTEGER NOT NULL,
     embedding BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reply_policies (
+    scope_type TEXT NOT NULL,
+    scope_id INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    activity TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope_type, scope_id)
+);
 """
 
 
@@ -188,3 +196,39 @@ def get_entries_by_ids(connection: sqlite3.Connection, segment_ids):
     ).fetchall()
     by_id = {row["segment_id"]: row for row in rows}
     return [by_id[segment_id] for segment_id in segment_ids if segment_id in by_id]
+
+
+def get_reply_policy(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+):
+    return connection.execute(
+        """
+        SELECT mode, activity
+        FROM reply_policies
+        WHERE scope_type=? AND scope_id=?
+        """,
+        (scope_type, scope_id),
+    ).fetchone()
+
+
+def set_reply_policy(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+    mode: str,
+    activity: str,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO reply_policies (scope_type, scope_id, mode, activity)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+                mode=excluded.mode,
+                activity=excluded.activity,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (scope_type, scope_id, mode, activity),
+        )

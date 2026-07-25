@@ -5,6 +5,8 @@ from pathlib import Path
 import os
 from typing import Optional
 
+from .policy import normalize_activity, normalize_mode
+
 
 def _optional_int(name: str):
     value = os.getenv(name, "").strip()
@@ -38,6 +40,9 @@ class Settings:
     auto_reply_guild_mentions_only: bool
     auto_reply_channel_ids: frozenset[int]
     auto_reply_cooldown_seconds: float
+    auto_reply_mode: str
+    auto_reply_activity: str
+    context_message_limit: int
     decision_log_enabled: bool
     decision_log_path_override: Optional[Path]
     data_dir: Path
@@ -73,6 +78,19 @@ class Settings:
             auto_reply_cooldown_seconds=max(
                 0.0,
                 float(os.getenv("AUTO_REPLY_COOLDOWN_SECONDS", "10")),
+            ),
+            auto_reply_mode=normalize_mode(
+                os.getenv(
+                    "AUTO_REPLY_MODE",
+                    "auto" if _bool("AUTO_REPLY_ENABLED", True) else "off",
+                )
+            ),
+            auto_reply_activity=normalize_activity(
+                os.getenv("AUTO_REPLY_ACTIVITY", "medium")
+            ),
+            context_message_limit=min(
+                10,
+                max(1, int(os.getenv("CONTEXT_MESSAGE_LIMIT", "5"))),
             ),
             decision_log_enabled=_bool("DECISION_LOG_ENABLED", True),
             decision_log_path_override=(

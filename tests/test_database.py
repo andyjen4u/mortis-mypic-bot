@@ -9,7 +9,13 @@ try:
 except ImportError:
     np = None
 
-from mypic_bot.database import connect, import_metadata, search
+from mypic_bot.database import (
+    connect,
+    get_reply_policy,
+    import_metadata,
+    search,
+    set_reply_policy,
+)
 from mypic_bot.database import store_embeddings
 
 if np is not None:
@@ -17,6 +23,22 @@ if np is not None:
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_reply_policy_is_persistent_per_scope(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "test.sqlite3"
+            connection = connect(path)
+            self.assertIsNone(get_reply_policy(connection, "channel", 123))
+            set_reply_policy(connection, "channel", 123, "auto", "high")
+            policy = get_reply_policy(connection, "channel", 123)
+            self.assertEqual((policy["mode"], policy["activity"]), ("auto", "high"))
+            set_reply_policy(connection, "channel", 123, "off", "low")
+            connection.close()
+
+            connection = connect(path)
+            policy = get_reply_policy(connection, "channel", 123)
+            self.assertEqual((policy["mode"], policy["activity"]), ("off", "low"))
+            connection.close()
+
     def test_import_and_chinese_substring_search(self):
         sample = [
             {

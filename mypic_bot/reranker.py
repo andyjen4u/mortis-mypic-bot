@@ -12,6 +12,18 @@ class RerankResult:
     score: float
 
 
+def credible_rerank_results(
+    results: Sequence[RerankResult],
+) -> tuple[list[RerankResult], float | None]:
+    if not results:
+        return [], None
+    top_score = results[0].score
+    minimum_score = max(top_score * 0.70, top_score - 0.15)
+    return [
+        result for result in results if result.score >= minimum_score
+    ], minimum_score
+
+
 def parse_rerank_results(payload: dict, candidate_count: int) -> list[RerankResult]:
     parsed = []
     seen = set()
@@ -29,14 +41,17 @@ def parse_rerank_results(payload: dict, candidate_count: int) -> list[RerankResu
     return sorted(parsed, key=lambda result: result.score, reverse=True)
 
 
-def reranker_query(query: str) -> str:
+def reranker_query(query: str, conversation: str = "") -> str:
+    context = f"\nRecent group-chat context:\n{conversation}" if conversation else ""
     return (
-        "Judge whether the candidate dialogue is a natural, witty reaction-meme "
-        "reply to the Discord user message. Prefer sarcasm, absurd contrast, "
-        "deadpan humor, exaggeration, and playful teasing. A candidate that merely "
-        "shares keywords but does not form a coherent reply is irrelevant. "
+        "Judge whether a third friend who is observing the conversation could drop "
+        "the candidate into the group chat as a timely, witty reaction image. It "
+        "does not need to answer the message directly. Prefer agreement, piling on, "
+        "playful teasing, disbelief, celebration, commiseration, awkwardness, "
+        "absurd contrast, and exaggeration. A keyword-only, random, or forced "
+        "candidate is irrelevant. "
         "For distress or crisis messages, prefer gentle and supportive replies. "
-        f"Discord user message: {query}"
+        f"Latest Discord message: {query}{context}"
     )
 
 
@@ -44,6 +59,7 @@ async def rerank_candidates(
     settings: Settings,
     query: str,
     candidates: Sequence,
+    conversation: str = "",
 ) -> list[RerankResult]:
     import httpx
 
@@ -54,7 +70,7 @@ async def rerank_candidates(
         headers["Authorization"] = f"Bearer {settings.reranker_api_key}"
     payload = {
         "model": settings.reranker_model,
-        "query": reranker_query(query),
+        "query": reranker_query(query, conversation),
         "documents": [candidate["text"] for candidate in candidates],
         "top_n": min(settings.reranker_top_n, len(candidates)),
     }

@@ -15,6 +15,9 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.auto_reply_guild_mentions_only)
         self.assertEqual(settings.auto_reply_channel_ids, frozenset())
         self.assertEqual(settings.auto_reply_cooldown_seconds, 10.0)
+        self.assertEqual(settings.auto_reply_mode, "auto")
+        self.assertEqual(settings.auto_reply_activity, "medium")
+        self.assertEqual(settings.context_message_limit, 5)
         self.assertTrue(settings.decision_log_enabled)
         self.assertEqual(
             settings.decision_log_path,
@@ -31,6 +34,9 @@ class SettingsTests(unittest.TestCase):
             "AUTO_REPLY_GUILD_MENTIONS_ONLY": "false",
             "AUTO_REPLY_CHANNEL_IDS": "123, 456",
             "AUTO_REPLY_COOLDOWN_SECONDS": "2.5",
+            "AUTO_REPLY_MODE": "always",
+            "AUTO_REPLY_ACTIVITY": "high",
+            "CONTEXT_MESSAGE_LIMIT": "4",
             "DECISION_LOG_ENABLED": "false",
             "DECISION_LOG_PATH": "/tmp/mortis-decisions.jsonl",
             "RERANKER_BASE_URL": "http://localhost:8083/v1/",
@@ -45,6 +51,9 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.auto_reply_guild_mentions_only)
         self.assertEqual(settings.auto_reply_channel_ids, frozenset({123, 456}))
         self.assertEqual(settings.auto_reply_cooldown_seconds, 2.5)
+        self.assertEqual(settings.auto_reply_mode, "always")
+        self.assertEqual(settings.auto_reply_activity, "high")
+        self.assertEqual(settings.context_message_limit, 4)
         self.assertFalse(settings.decision_log_enabled)
         self.assertEqual(
             settings.decision_log_path,

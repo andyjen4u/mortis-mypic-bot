@@ -9,13 +9,13 @@ Mortis 是一個自架 Discord reaction meme 機器人。它會根據使用者�
 ## 工作流程
 
 ```text
-Discord /mypic
+Discord 訊息、提及或 /mypic
     ↓
 本地 embedding 模型進行多角度候選檢索
     ↓
-Qwen3 cross-encoder 將 48 張候選重排至前 5 張
+Qwen3 cross-encoder 將 48 張候選重排，留下最多 5 張可信候選
     ↓
-地端聊天模型從前 5 張選出最有梗的回覆
+地端聊天模型判斷是否值得插話，並從前 5 張選圖
     ↓
 從本地圖片快取回傳選中的 WebP
 ```
@@ -39,7 +39,8 @@ Qwen3 cross-encoder 將 48 張候選重排至前 5 張
 - Discord `/mypic` slash command
 - 同時支援 Guild Install 與 User Install
 - 可在伺服器、Bot 私訊、私人及群組頻道使用
-- 私訊一般文字可自動選圖；伺服器支援提及 Bot 或指定頻道自動回覆
+- 三種回圖模式、三級積極度及分頻道／使用者持久設定
+- 讀取同頻道最近 5 則訊息；提及 Bot 時一定選圖
 - systemd Bot、下載與 embedding 服務範本
 
 ## 系統需求
@@ -117,23 +118,30 @@ mortis-bot
 
 Rocky Linux 等 systemd 環境可參考 [`deploy/`](deploy/) 內的服務範本。
 
-## 自動回覆
+## 回圖模式
 
-自動回覆預設開啟，行為如下：
+預設為 `auto + medium`。三種模式如下：
 
-- 私訊 Mortis：每則一般文字訊息都會自動選圖回覆。
-- 伺服器：預設必須提及 Mortis。
-- `AUTO_REPLY_CHANNEL_IDS` 中的頻道：不需提及 Mortis。
+- `always`：每則一般文字訊息都選一張圖。
+- `auto`：模型評估插話時機及候選品質後決定是否回圖。
+- `off`：不監聽普通訊息。
+- 無論模式為何，提及 Mortis 或使用 `/mypic` 都會強制選圖。
 - Bot 與 Webhook 訊息一律忽略，避免無限回覆。
-- 同一使用者及頻道預設有 10 秒冷卻時間。
+- `auto` 模式以頻道為單位套用冷卻時間；提及不受冷卻限制。
+- `auto` 的 `low`、`medium`、`high` 分別使用 0.82、0.68、0.52
+  的插話信心門檻。普通問候會直接保持沉默。
 
 ```dotenv
+AUTO_REPLY_MODE=auto
+AUTO_REPLY_ACTIVITY=medium
+CONTEXT_MESSAGE_LIMIT=5
 AUTO_REPLY_ENABLED=true
 AUTO_REPLY_DMS=true
-AUTO_REPLY_GUILD_MENTIONS_ONLY=true
-AUTO_REPLY_CHANNEL_IDS=123456789012345678,234567890123456789
 AUTO_REPLY_COOLDOWN_SECONDS=10
 ```
+
+在 Discord 使用 `/mypic-settings` 可查看或修改當前範圍的模式及積極度。
+伺服器內按頻道保存，修改需要「管理訊息」權限；私訊則按使用者保存。
 
 自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用
 **Message Content Intent**。
@@ -148,12 +156,14 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 每筆紀錄包含：
 
-- 使用者原始訊息與 Discord 訊息／頻道識別碼
+- 使用者原始訊息、最近群聊及 Discord 訊息／頻道識別碼
 - 四個語意檢索查詢
 - 48 張召回候選及 cross-encoder 排序後的前 5 張
 - 候選字幕、segment ID、語意相似度、檢索角度及 reranker 分數
 - 地端聊天模型最後選擇的候選編號
-- 模型提供的簡短理由、幽默手法與信心值
+- 模式、積極度、是否被提及、插話門檻結果
+- 模型的 `post`／`stay_silent` 決策、簡短理由、梗圖角色與信心值
+- cross-encoder 分數落差保護是否介入
 - 最後傳送的本機圖片路徑
 
 這是可供稽核的決策摘要，不是模型不可驗證的內部逐步思考。紀錄包含使用者

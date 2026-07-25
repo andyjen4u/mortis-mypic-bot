@@ -1,0 +1,21 @@
+[Unit]
+Description=Qwen3 0.6B Q8 reranker on GTX 1060
+After=network-online.target nemotron-embedding.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CUDA_VISIBLE_DEVICES=1
+Environment=LD_LIBRARY_PATH=/opt/llama.cpp-embed/build-embed/bin
+ExecStart=/opt/llama.cpp-embed/build-embed/bin/llama-server \
+  -m /opt/models/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf \
+  --host 192.168.10.102 --port 8083 \
+  --embedding --pooling rank --rerank \
+  -c 512 -np 1 -b 256 -ub 256
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

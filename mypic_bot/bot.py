@@ -17,6 +17,7 @@ from .decision_log import append_decision
 from .embeddings import SemanticIndex, meme_retrieval_queries, request_embeddings
 from .images import download_one
 from .llm import CandidateChoice, choose_candidate
+from .reranker import rerank_candidates
 
 
 class MyPicClient(discord.Client):
@@ -55,6 +56,13 @@ class MyPicClient(discord.Client):
             self.settings.decision_log_enabled,
             self.settings.decision_log_path,
         )
+        logging.info(
+            "Cross-encoder reranker endpoint=%s model=%s pool=%s top_n=%s",
+            self.settings.reranker_base_url or "disabled",
+            self.settings.reranker_model or "default",
+            self.settings.retrieval_pool_size,
+            self.settings.reranker_top_n,
+        )
 
     async def close(self) -> None:
         self.connection.close()
@@ -84,6 +92,8 @@ class MyPicClient(discord.Client):
             candidate_scores: list[float | None] = []
             candidate_query_indexes: list[int | None] = []
             candidate_query_ranks: list[int | None] = []
+            candidate_pool_indexes: list[int] = []
+            candidate_reranker_scores: list[float | None] = []
             retrieval_mode = "text"
             retrieval_error = None
             if self.semantic_index is not None and self.settings.embedding_base_url:
@@ -96,8 +106,13 @@ class MyPicClient(discord.Client):
                         self.semantic_index.diverse_search_entries_detailed(
                             self.connection,
                             query_vectors,
-                            per_query_limit=4,
-                            total_limit=12,
+                            per_query_limit=(
+                                self.settings.retrieval_pool_size
+                                + len(retrieval_queries)
+                                - 1
+                            )
+                            // len(retrieval_queries),
+                            total_limit=self.settings.retrieval_pool_size,
                         )
                     )
                     candidates = [
@@ -120,7 +135,11 @@ class MyPicClient(discord.Client):
                     retrieval_error = f"{type(error).__name__}: {error}"
                     logging.exception("Semantic retrieval failed; using text search")
             if not candidates:
-                candidates = search(self.connection, query, limit=12)
+                candidates = search(
+                    self.connection,
+                    query,
+                    limit=self.settings.retrieval_pool_size,
+                )
                 candidate_scores = [None] * len(candidates)
                 candidate_query_indexes = [None] * len(candidates)
                 candidate_query_ranks = [None] * len(candidates)
@@ -141,6 +160,61 @@ class MyPicClient(discord.Client):
                     }
                 )
                 return None
+            retrieval_records = [
+                {
+                    "pool_index": index,
+                    "segment_id": candidate["segment_id"],
+                    "text": candidate["text"],
+                    "semantic_score": score,
+                    "retrieval_query_index": query_index,
+                    "retrieval_rank": query_rank,
+                }
+                for index, (candidate, score, query_index, query_rank) in enumerate(
+                    zip(
+                        candidates,
+                        candidate_scores,
+                        candidate_query_indexes,
+                        candidate_query_ranks,
+                    )
+                )
+            ]
+            cross_encoder_error = None
+            rerank_results = []
+            if self.settings.reranker_base_url:
+                try:
+                    rerank_results = await rerank_candidates(
+                        self.settings,
+                        query,
+                        candidates,
+                    )
+                except Exception as error:
+                    cross_encoder_error = f"{type(error).__name__}: {error}"
+                    logging.exception(
+                        "Cross-encoder reranking failed; using retrieval order"
+                    )
+            if rerank_results:
+                selected_pool_indexes = [
+                    result.original_index for result in rerank_results
+                ]
+                candidate_reranker_scores = [
+                    result.score for result in rerank_results
+                ]
+            else:
+                selected_pool_indexes = list(
+                    range(min(self.settings.reranker_top_n, len(candidates)))
+                )
+                candidate_reranker_scores = [None] * len(selected_pool_indexes)
+            candidate_pool_indexes = selected_pool_indexes
+            candidates = [candidates[index] for index in selected_pool_indexes]
+            candidate_scores = [
+                candidate_scores[index] for index in selected_pool_indexes
+            ]
+            candidate_query_indexes = [
+                candidate_query_indexes[index] for index in selected_pool_indexes
+            ]
+            candidate_query_ranks = [
+                candidate_query_ranks[index] for index in selected_pool_indexes
+            ]
             try:
                 choice = await choose_candidate(
                     self.settings,
@@ -179,12 +253,21 @@ class MyPicClient(discord.Client):
                 image_source = "download"
 
             candidate_records = []
-            for index, (candidate, score, query_index, query_rank) in enumerate(
+            for index, (
+                candidate,
+                score,
+                query_index,
+                query_rank,
+                pool_index,
+                reranker_score,
+            ) in enumerate(
                 zip(
                     candidates,
                     candidate_scores,
                     candidate_query_indexes,
                     candidate_query_ranks,
+                    candidate_pool_indexes,
+                    candidate_reranker_scores,
                 )
             ):
                 candidate_records.append(
@@ -195,6 +278,8 @@ class MyPicClient(discord.Client):
                         "semantic_score": score,
                         "retrieval_query_index": query_index,
                         "retrieval_rank": query_rank,
+                        "retrieval_pool_index": pool_index,
+                        "reranker_score": reranker_score,
                         "season": candidate["season"],
                         "episode": candidate["episode"],
                         "frame_prefer": candidate["frame_prefer"],
@@ -210,9 +295,16 @@ class MyPicClient(discord.Client):
                         "mode": retrieval_mode,
                         "queries": retrieval_queries,
                         "error": retrieval_error,
+                        "pool_size": len(retrieval_records),
+                        "candidates": retrieval_records,
                     },
                     "candidates": candidate_records,
-                    "reranker": {
+                    "cross_encoder": {
+                        "model": self.settings.reranker_model,
+                        "selected_count": len(candidates),
+                        "error": cross_encoder_error,
+                    },
+                    "llm_reranker": {
                         "model": self.settings.llm_model,
                         "selected_index": choice.index,
                         "reason": choice.reason,

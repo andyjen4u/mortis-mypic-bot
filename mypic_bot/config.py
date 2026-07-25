@@ -47,6 +47,11 @@ class Settings:
     embedding_base_url: str
     embedding_api_key: str
     embedding_model: str
+    reranker_base_url: str
+    reranker_api_key: str
+    reranker_model: str
+    retrieval_pool_size: int
+    reranker_top_n: int
     db_url: str
     image_base_url: str
     download_concurrency: int
@@ -82,6 +87,17 @@ class Settings:
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL", "").rstrip("/"),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY", "").strip(),
             embedding_model=os.getenv("EMBEDDING_MODEL", "").strip(),
+            reranker_base_url=os.getenv("RERANKER_BASE_URL", "").rstrip("/"),
+            reranker_api_key=os.getenv("RERANKER_API_KEY", "").strip(),
+            reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
+            retrieval_pool_size=max(
+                12,
+                int(os.getenv("RETRIEVAL_POOL_SIZE", "48")),
+            ),
+            reranker_top_n=max(
+                1,
+                int(os.getenv("RERANKER_TOP_N", "5")),
+            ),
             db_url=os.getenv(
                 "MYPIC_DB_URL",
                 "https://raw.githubusercontent.com/Its-MyPic/Its-MyPicDB/json/data.json",

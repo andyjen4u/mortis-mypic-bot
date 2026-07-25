@@ -13,7 +13,9 @@ Discord /mypic
     ↓
 本地 embedding 模型進行多角度候選檢索
     ↓
-地端聊天模型依「哪張最有梗」重排候選
+Qwen3 cross-encoder 將 48 張候選重排至前 5 張
+    ↓
+地端聊天模型從前 5 張選出最有梗的回覆
     ↓
 從本地圖片快取回傳選中的 WebP
 ```
@@ -31,6 +33,7 @@ Discord /mypic
 - 可續傳、限速及有限併發的圖片下載
 - SQLite、FTS5 與本地語意向量索引
 - OpenAI-compatible embedding API
+- llama.cpp `/v1/rerank` cross-encoder API
 - OpenAI-compatible chat completions API
 - llama.cpp `thinking_budget_tokens` 與 JSON Schema 輸出
 - Discord `/mypic` slash command
@@ -44,6 +47,7 @@ Discord /mypic
 - Python 3.9 或更新版本
 - Discord Application 與 Bot Token
 - OpenAI-compatible embedding endpoint
+- 選配：llama.cpp-compatible reranker endpoint
 - 選配：OpenAI-compatible chat completions endpoint
 - 足夠儲存 Its-MyPicDB 圖片的空間
 
@@ -92,11 +96,18 @@ mortis-data embed --batch-size 16 --rebuild
 
 ## 測試選圖
 
-不啟動 Discord Bot 也能測試完整的檢索與 LLM 重排：
+不啟動 Discord Bot 也能測試完整的檢索、cross-encoder 與 LLM 重排：
 
 ```bash
-mortis-data query "今天加班到快死了" --limit 12 --rerank
+mortis-data query "今天加班到快死了" \
+  --limit 5 --cross-rerank --rerank
 ```
+
+目前部署使用 `Qwen3-Reranker-0.6B Q8_0 GGUF`，固定放在 GTX 1060，
+服務範本是 [`deploy/qwen3-reranker.service`](deploy/qwen3-reranker.service)。
+模型來源 revision 為 `a02f48bb4f057028298c21fa033da2b30d7742d5`，
+GGUF SHA-256 為
+`22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48`。
 
 ## 啟動 Bot
 
@@ -139,8 +150,9 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 - 使用者原始訊息與 Discord 訊息／頻道識別碼
 - 四個語意檢索查詢
-- 12 張候選圖的字幕、segment ID、語意相似度、檢索角度與該角度名次
-- 重排模型選擇的候選編號
+- 48 張召回候選及 cross-encoder 排序後的前 5 張
+- 候選字幕、segment ID、語意相似度、檢索角度及 reranker 分數
+- 地端聊天模型最後選擇的候選編號
 - 模型提供的簡短理由、幽默手法與信心值
 - 最後傳送的本機圖片路徑
 

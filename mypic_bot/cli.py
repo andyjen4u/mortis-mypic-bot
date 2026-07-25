@@ -13,6 +13,7 @@ from .embeddings import (
 )
 from .llm import choose_candidate
 from .images import download_many
+from .reranker import rerank_candidates
 from .sync import fetch_metadata
 
 
@@ -71,6 +72,7 @@ async def run_query(
     query: str,
     limit: int,
     rerank: bool,
+    cross_rerank: bool,
 ) -> None:
     connection = connect(settings.db_path)
     index = SemanticIndex.from_database(connection)
@@ -80,16 +82,37 @@ async def run_query(
         settings,
         meme_retrieval_queries(query),
     )
+    retrieval_limit = settings.retrieval_pool_size if cross_rerank else limit
     scored_entries = index.diverse_search_entries(
         connection,
         query_vectors,
-        per_query_limit=max(1, min(8, limit)),
-        total_limit=limit,
+        per_query_limit=max(
+            1,
+            (retrieval_limit + len(query_vectors) - 1) // len(query_vectors),
+        ),
+        total_limit=retrieval_limit,
     )
+    reranker_scores = [None] * len(scored_entries)
+    if cross_rerank:
+        results = await rerank_candidates(
+            settings,
+            query,
+            [entry for entry, _score in scored_entries],
+        )
+        scored_entries = [
+            scored_entries[result.original_index] for result in results[:limit]
+        ]
+        reranker_scores = [result.score for result in results[:limit]]
+    else:
+        scored_entries = scored_entries[:limit]
+        reranker_scores = reranker_scores[:limit]
     candidates = [entry for entry, _score in scored_entries]
-    for position, (entry, score) in enumerate(scored_entries):
+    for position, ((entry, score), reranker_score) in enumerate(
+        zip(scored_entries, reranker_scores)
+    ):
         print(
             f"{position}: score={score:.4f} segment={entry['segment_id']} "
+            f"reranker={reranker_score if reranker_score is not None else '-'} "
             f"text={entry['text']}"
         )
     if rerank:
@@ -122,6 +145,7 @@ def main() -> None:
     query_parser.add_argument("text")
     query_parser.add_argument("--limit", type=int, default=10)
     query_parser.add_argument("--rerank", action="store_true")
+    query_parser.add_argument("--cross-rerank", action="store_true")
     subparsers.add_parser("status")
     args = parser.parse_args()
     settings = Settings.from_env()
@@ -138,6 +162,7 @@ def main() -> None:
                 args.text,
                 max(1, args.limit),
                 args.rerank,
+                args.cross_rerank,
             )
         )
     else:

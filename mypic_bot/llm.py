@@ -64,7 +64,7 @@ async def choose_candidate(
         "優先考慮吐槽、反諷、荒謬反差、誇張反應、冷面笑匠或朋友間欠揍的"
         "幽默。台詞必須能作為對使用者訊息的回應，而不是單純重述它。"
         "避免仇恨、歧視或惡意人身攻擊；若訊息涉及真實危機，選擇較溫和的"
-        "幽默。請提供一個簡短、可供事後稽核的選擇理由，不要輸出逐步思考"
+        "幽默。請用一個短句提供可供事後稽核的選擇理由，不要輸出逐步思考"
         "或冗長分析。只輸出 JSON，包含 index、reason、humor_style、"
         "confidence。\n\n"
         f"使用者訊息：{query}\n\n候選：\n{candidate_text}"
@@ -76,8 +76,8 @@ async def choose_candidate(
         "model": settings.llm_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "max_tokens": 768,
-        "thinking_budget_tokens": 512,
+        "max_tokens": 512,
+        "thinking_budget_tokens": 384,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -91,7 +91,10 @@ async def choose_candidate(
                             "minimum": 0,
                             "maximum": len(candidates) - 1,
                         },
-                        "reason": {"type": "string"},
+                        "reason": {
+                            "type": "string",
+                            "maxLength": 200,
+                        },
                         "humor_style": {
                             "type": "string",
                             "enum": [

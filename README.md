@@ -36,6 +36,7 @@ Discord /mypic
 - Discord `/mypic` slash command
 - 同時支援 Guild Install 與 User Install
 - 可在伺服器、Bot 私訊、私人及群組頻道使用
+- 私訊一般文字可自動選圖；伺服器支援提及 Bot 或指定頻道自動回覆
 - systemd Bot、下載與 embedding 服務範本
 
 ## 系統需求
@@ -104,6 +105,27 @@ mortis-bot
 ```
 
 Rocky Linux 等 systemd 環境可參考 [`deploy/`](deploy/) 內的服務範本。
+
+## 自動回覆
+
+自動回覆預設開啟，行為如下：
+
+- 私訊 Mortis：每則一般文字訊息都會自動選圖回覆。
+- 伺服器：預設必須提及 Mortis。
+- `AUTO_REPLY_CHANNEL_IDS` 中的頻道：不需提及 Mortis。
+- Bot 與 Webhook 訊息一律忽略，避免無限回覆。
+- 同一使用者及頻道預設有 10 秒冷卻時間。
+
+```dotenv
+AUTO_REPLY_ENABLED=true
+AUTO_REPLY_DMS=true
+AUTO_REPLY_GUILD_MENTIONS_ONLY=true
+AUTO_REPLY_CHANNEL_IDS=123456789012345678,234567890123456789
+AUTO_REPLY_COOLDOWN_SECONDS=10
+```
+
+自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用
+**Message Content Intent**。
 
 ## Discord 安裝模式
 

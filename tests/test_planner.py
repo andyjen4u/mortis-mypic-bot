@@ -1,6 +1,10 @@
 import unittest
 
-from mypic_bot.planner import parse_interjection_plan
+from mypic_bot.planner import (
+    build_interjection_prompt,
+    enforce_plan_consistency,
+    parse_interjection_plan,
+)
 
 
 class InterjectionPlanTests(unittest.TestCase):
@@ -19,6 +23,7 @@ class InterjectionPlanTests(unittest.TestCase):
         )
         self.assertEqual(plan.action, "post")
         self.assertEqual(plan.meme_role, "celebration")
+        self.assertEqual(plan.speaker_perspective, "observer")
         self.assertIn("滿分", plan.reaction_goal)
         self.assertEqual(plan.search_terms, ("恭喜", "厲害"))
         self.assertEqual(plan.confidence, 0.88)
@@ -85,6 +90,86 @@ class InterjectionPlanTests(unittest.TestCase):
             """
         )
         self.assertEqual(plan.search_terms, ("謝謝", "好的"))
+
+    def test_parses_self_perspective(self):
+        plan = parse_interjection_plan(
+            """
+            {
+              "action": "post",
+              "reaction_goal": "用「抱歉／不是故意」心虛承認忽視對方",
+              "search_terms": ["抱歉", "不是故意", "被發現了"],
+              "meme_role": "awkwardness",
+              "speaker_perspective": "self",
+              "reason": "對方在抱怨機器人本人。",
+              "confidence": 0.95
+            }
+            """
+        )
+        self.assertEqual(plan.speaker_perspective, "self")
+        self.assertEqual(plan.meme_role, "awkwardness")
+
+    def test_prompt_routes_bot_accusations_to_self_perspective(self):
+        prompt = build_interjection_prompt(
+            "我被motis選擇性忽視了",
+            "Andy: motis怎麼都沒回",
+            bot_aliases=("Mortis", "motis"),
+        )
+        self.assertIn("名稱或別名包括：Mortis、motis", prompt)
+        self.assertIn("必須選 self", prompt)
+        self.assertIn("不能站在旁邊安慰對方", prompt)
+        self.assertIn("不得複製對方對你的指控", prompt)
+
+    def test_prompt_routes_bot_behavior_questions_to_direct_answers(self):
+        prompt = build_interjection_prompt(
+            "只傳貼圖他是不是就掛了",
+            "Andy: 這機器人看不懂貼圖嗎",
+            bot_aliases=("Mortis",),
+        )
+        self.assertIn("會不會故障", prompt)
+        self.assertIn("不知道／可能吧／不會吧／我沒問題", prompt)
+        self.assertIn("不要只把「掛了／完蛋了」", prompt)
+
+    def test_self_accusation_repairs_contradictory_search_terms(self):
+        plan = parse_interjection_plan(
+            """
+            {
+              "action": "post",
+              "reaction_goal": "解釋被忽視的指控",
+              "search_terms": ["沒看到", "沒在理你"],
+              "meme_role": "commiseration",
+              "speaker_perspective": "self",
+              "reason": "對方在抱怨我忽視他",
+              "confidence": 0.9
+            }
+            """
+        )
+        repaired = enforce_plan_consistency(
+            plan,
+            "我被 motis 選擇性忽視了",
+        )
+        self.assertEqual(
+            repaired.search_terms,
+            ("抱歉", "不是故意", "被發現了", "我錯了"),
+        )
+        self.assertEqual(repaired.meme_role, "awkwardness")
+
+    def test_self_status_question_keeps_direct_answer_terms(self):
+        plan = parse_interjection_plan(
+            """
+            {
+              "action": "post",
+              "reaction_goal": "回答自己是否正常",
+              "search_terms": ["沒問題", "還在"],
+              "meme_role": "other",
+              "speaker_perspective": "self",
+              "reason": "對方在詢問機器人狀態",
+              "confidence": 0.9
+            }
+            """
+        )
+        repaired = enforce_plan_consistency(plan, "他是不是掛了")
+        self.assertEqual(repaired.search_terms, ("沒問題", "還在"))
+        self.assertEqual(repaired.meme_role, "other")
 
 
 if __name__ == "__main__":

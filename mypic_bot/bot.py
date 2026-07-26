@@ -28,6 +28,7 @@ from .planner import InterjectionPlan, plan_interjection
 from .policy import is_low_signal_message, policy_summary, should_post_choice
 from .reranker import (
     candidate_text_key,
+    mentions_speaker_alias,
     rerank_candidate_perspectives,
     select_fused_candidate,
 )
@@ -111,6 +112,15 @@ class MyPicClient(discord.Client):
         except Exception:
             logging.exception("Failed to append decision audit log")
 
+    def runtime_bot_aliases(self) -> tuple[str, ...]:
+        aliases = list(self.settings.bot_aliases)
+        if self.user is not None:
+            for attribute in ("name", "display_name", "global_name"):
+                value = getattr(self.user, attribute, None)
+                if value:
+                    aliases.append(str(value))
+        return tuple(dict.fromkeys(aliases))
+
     async def select_image(
         self,
         query: str,
@@ -166,6 +176,7 @@ class MyPicClient(discord.Client):
                     query,
                     conversation,
                     allow_silence=allow_silence,
+                    bot_aliases=self.runtime_bot_aliases(),
                 )
                 planner_error = None
             except Exception as error:
@@ -176,6 +187,7 @@ class MyPicClient(discord.Client):
                     reaction_goal="對最新訊息做最直接、自然且不冒犯的群聊反應",
                     search_terms=(),
                     meme_role="other",
+                    speaker_perspective="observer",
                     reason="規劃模型失敗。",
                     confidence=0.0,
                 )
@@ -206,6 +218,7 @@ class MyPicClient(discord.Client):
                             "reaction_goal": plan.reaction_goal,
                             "search_terms": list(plan.search_terms),
                             "meme_role": plan.meme_role,
+                            "speaker_perspective": plan.speaker_perspective,
                             "reason": plan.reason,
                             "confidence": plan.confidence,
                             "error": planner_error,
@@ -223,6 +236,7 @@ class MyPicClient(discord.Client):
                 query,
                 conversation,
                 plan.reaction_goal,
+                plan.speaker_perspective,
             )
             candidates = []
             candidate_scores: list[float | None] = []
@@ -337,12 +351,21 @@ class MyPicClient(discord.Client):
                 retrieval_mode = "text"
             unique_candidate_records = []
             seen_candidate_texts = set()
+            runtime_aliases = self.runtime_bot_aliases()
             for candidate, score, query_index, query_rank in zip(
                 candidates,
                 candidate_scores,
                 candidate_query_indexes,
                 candidate_query_ranks,
             ):
+                if (
+                    plan.speaker_perspective == "self"
+                    and mentions_speaker_alias(
+                        candidate["text"],
+                        runtime_aliases,
+                    )
+                ):
+                    continue
                 text_key = candidate_text_key(candidate["text"])
                 if text_key and text_key in seen_candidate_texts:
                     continue
@@ -373,6 +396,7 @@ class MyPicClient(discord.Client):
                             "reaction_goal": plan.reaction_goal,
                             "search_terms": list(plan.search_terms),
                             "meme_role": plan.meme_role,
+                            "speaker_perspective": plan.speaker_perspective,
                             "reason": plan.reason,
                             "confidence": plan.confidence,
                             "error": planner_error,
@@ -419,6 +443,7 @@ class MyPicClient(discord.Client):
                         plan.reaction_goal,
                         plan.meme_role,
                         plan.search_terms,
+                        plan.speaker_perspective,
                     )
                 except Exception as error:
                     cross_encoder_error = f"{type(error).__name__}: {error}"
@@ -512,6 +537,7 @@ class MyPicClient(discord.Client):
                 conversation,
                 plan.reaction_goal,
                 plan.search_terms[0] if plan.search_terms else "",
+                plan.speaker_perspective,
             )
             if routed is not None:
                 fallback_index, fallback_perspective = routed
@@ -548,6 +574,7 @@ class MyPicClient(discord.Client):
                         conversation,
                         allow_silence=allow_silence,
                         reaction_goal=plan.reaction_goal,
+                        speaker_perspective=plan.speaker_perspective,
                     )
                     selected_perspective = "gemma_final_judge"
                     selector_error = None
@@ -592,6 +619,7 @@ class MyPicClient(discord.Client):
                             "reaction_goal": plan.reaction_goal,
                             "search_terms": list(plan.search_terms),
                             "meme_role": plan.meme_role,
+                            "speaker_perspective": plan.speaker_perspective,
                             "reason": plan.reason,
                             "confidence": plan.confidence,
                             "error": planner_error,
@@ -674,6 +702,7 @@ class MyPicClient(discord.Client):
                         "reaction_goal": plan.reaction_goal,
                         "search_terms": list(plan.search_terms),
                         "meme_role": plan.meme_role,
+                        "speaker_perspective": plan.speaker_perspective,
                         "reason": plan.reason,
                         "confidence": plan.confidence,
                         "error": planner_error,

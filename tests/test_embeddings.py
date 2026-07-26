@@ -26,6 +26,20 @@ class RetrievalQueryTests(unittest.TestCase):
         self.assertIn("接住主管要求大家再撐一下的壓迫感", queries[0])
         self.assertIn("不得只靠圖片背景或硬拗", queries[0])
 
+    def test_self_perspective_is_preserved_in_every_query(self):
+        queries = meme_retrieval_queries(
+            "我被motis忽視了",
+            "",
+            "用「抱歉／不是故意」心虛承認",
+            "self",
+        )
+        self.assertTrue(
+            all(
+                "機器人本人" in query or "當事人角度" in query
+                for query in queries
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

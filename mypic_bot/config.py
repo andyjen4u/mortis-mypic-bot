@@ -31,6 +31,13 @@ def _int_set(name: str) -> frozenset[int]:
     return frozenset(int(item.strip()) for item in value.split(",") if item.strip())
 
 
+def _string_tuple(name: str, default: str = "") -> tuple[str, ...]:
+    value = os.getenv(name, default)
+    return tuple(
+        dict.fromkeys(item.strip() for item in value.split(",") if item.strip())
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     discord_token: str
@@ -49,6 +56,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_model: str
+    bot_aliases: tuple[str, ...]
     final_judge_enabled: bool
     embedding_base_url: str
     embedding_api_key: str
@@ -103,6 +111,7 @@ class Settings:
             llm_base_url=os.getenv("LLM_BASE_URL", "").rstrip("/"),
             llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
             llm_model=os.getenv("LLM_MODEL", "").strip(),
+            bot_aliases=_string_tuple("BOT_ALIASES", "Mortis,Motis"),
             final_judge_enabled=_bool("FINAL_JUDGE_ENABLED", False),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL", "").rstrip("/"),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY", "").strip(),

@@ -7,6 +7,7 @@ from mypic_bot.reranker import (
     contextual_reranker_query,
     fuse_rerank_results,
     include_anchor_candidates,
+    mentions_speaker_alias,
     parse_rerank_results,
     reaction_reranker_query,
     reranker_query,
@@ -178,7 +179,7 @@ class RerankerTests(unittest.TestCase):
             "朋友說五分鐘到",
             "Andy: 他每次都說快到了",
         )
-        self.assertIn("第三位朋友", query)
+        self.assertIn("群聊插話者", query)
         self.assertIn("原封不動", query)
         self.assertIn("點名對話外人物", query)
         self.assertIn("朋友說五分鐘到", query)
@@ -201,6 +202,42 @@ class RerankerTests(unittest.TestCase):
         self.assertIn("接住主管要求大家再撐一下的壓迫感", query)
         self.assertIn("同病相憐", query)
         self.assertIn("前一句", query)
+
+    def test_self_perspective_requires_candidate_to_speak_as_bot(self):
+        query = reaction_reranker_query(
+            "我被motis選擇性忽視了",
+            "",
+            "用「抱歉／不是故意」心虛承認忽視對方",
+            "awkwardness",
+            "self",
+        )
+        self.assertIn("機器人本人所說", query)
+        self.assertIn("當事人的回答", query)
+
+    def test_self_perspective_uses_reaction_ranking_for_other_role(self):
+        fused = fuse_rerank_results(
+            [RerankResult(0, 0.99), RerankResult(1, 0.8)],
+            [RerankResult(1, 0.98), RerankResult(0, 0.7)],
+        )
+        selected = select_fused_candidate(
+            fused,
+            "other",
+            "他是不是掛了",
+            ["就是朋友有意見嗎", "沒問題啦"],
+            "",
+            "用「沒問題」回答自己的狀態",
+            "",
+            "self",
+        )
+        self.assertEqual(selected, (1, "reaction"))
+
+    def test_detects_caption_that_addresses_bot_by_name(self):
+        self.assertTrue(
+            mentions_speaker_alias("Mortis, 睦呢?", ("Mortis", "Motis"))
+        )
+        self.assertFalse(
+            mentions_speaker_alias("我真的不是故意的", ("Mortis", "Motis"))
+        )
 
 
 if __name__ == "__main__":

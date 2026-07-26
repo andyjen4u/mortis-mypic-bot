@@ -60,6 +60,7 @@ async def choose_candidate(
     conversation: str = "",
     allow_silence: bool = False,
     reaction_goal: str = "",
+    speaker_perspective: str = "observer",
 ) -> CandidateChoice:
     import httpx
 
@@ -76,6 +77,12 @@ async def choose_candidate(
         f"{index}: {row['text']}" for index, row in enumerate(candidates)
     )
     conversation_text = conversation or "（沒有更早的對話）"
+    perspective_instruction = (
+        "本次訊息是在談你本人，候選字幕必須像被點名、被詢問或被指控的"
+        "當事人所說；不可改站旁觀者角度安慰或評論對方。"
+        if speaker_perspective == "self"
+        else "本次訊息不是在談你本人，候選字幕應是群聊朋友的旁觀反應。"
+    )
     silence_instruction = (
         "你可以選擇 stay_silent。只有當第三位朋友此刻丟出候選反應圖，"
         "真的會自然、有梗且不搶話時才選 post。普通問候、資訊不足、沒有"
@@ -88,8 +95,9 @@ async def choose_candidate(
     )
     prompt = (
         "你是熟悉中文網路文化的群聊梗圖選手。你不是對話助理，也不是在"
-        "回答問題；你是一位旁觀群聊的第三個朋友，判斷現在丟哪張 reaction "
-        "meme 插話最有時機感。先判斷候選字幕與對話是否有不需硬拗的直接"
+        "回答問題；你是會用 reaction meme 插話的群聊成員。"
+        f"{perspective_instruction}"
+        "判斷現在丟哪張圖最有時機感。先判斷候選字幕與對話是否有不需硬拗的直接"
         "關係，再考慮幽默效果；關係成立比戲劇性更重要。候選字幕可扮演"
         "附和、補刀、起鬨、吐槽、"
         "難以置信、慶祝、同病相憐、尷尬或誇張反應。不要因為字面關鍵詞"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 
@@ -13,8 +13,32 @@ class InterjectionPlan:
     reaction_goal: str
     search_terms: tuple[str, ...]
     meme_role: str
+    speaker_perspective: str
     reason: str
     confidence: float
+
+
+SELF_ACCOUNTABILITY_CUES = (
+    "忽視",
+    "無視",
+    "不理",
+    "沒理",
+    "沒回",
+    "故意",
+    "裝死",
+    "忘了",
+    "忘記",
+    "騙",
+    "害我",
+    "指責",
+    "抱怨",
+    "道歉",
+    "心虛",
+    "抓包",
+    "被發現",
+    "做錯",
+)
+SELF_ACCOUNTABILITY_TERMS = ("抱歉", "不是故意", "被發現了", "我錯了")
 
 
 def _normalize_search_term(value) -> str:
@@ -59,28 +83,45 @@ def parse_interjection_plan(content: str) -> InterjectionPlan:
         reaction_goal=str(result.get("reaction_goal", "")).strip()[:60],
         search_terms=search_terms,
         meme_role=str(result.get("meme_role", "other")).strip() or "other",
+        speaker_perspective=(
+            str(result.get("speaker_perspective", "observer")).strip().lower()
+            if str(result.get("speaker_perspective", "observer")).strip().lower()
+            in {"observer", "self"}
+            else "observer"
+        ),
         reason=str(result.get("reason", "")).strip(),
         confidence=min(1.0, max(0.0, float(result.get("confidence", 0.0)))),
     )
 
 
-async def plan_interjection(
-    settings: Settings,
+def enforce_plan_consistency(
+    plan: InterjectionPlan,
+    query: str,
+) -> InterjectionPlan:
+    if plan.speaker_perspective != "self":
+        return plan
+    accountability_context = " ".join(
+        (query, plan.reaction_goal, plan.reason)
+    )
+    if not any(cue in accountability_context for cue in SELF_ACCOUNTABILITY_CUES):
+        return plan
+    return replace(
+        plan,
+        search_terms=SELF_ACCOUNTABILITY_TERMS,
+        meme_role=(
+            plan.meme_role
+            if plan.meme_role in {"awkwardness", "teasing"}
+            else "awkwardness"
+        ),
+    )
+
+
+def build_interjection_prompt(
     query: str,
     conversation: str = "",
     allow_silence: bool = True,
-) -> InterjectionPlan:
-    import httpx
-
-    if not settings.llm_base_url or not settings.llm_model:
-        return InterjectionPlan(
-            action="stay_silent" if allow_silence else "post",
-            reaction_goal="對最新訊息做最直接、自然且不冒犯的群聊反應",
-            search_terms=(),
-            meme_role="other",
-            reason="未設定規劃模型。",
-            confidence=0.0,
-        )
+    bot_aliases: tuple[str, ...] = (),
+) -> str:
     action_rule = (
         "先嚴格判斷 action。下列情況必須 stay_silent："
         "（1）只有時間、行程、地點、餐點、天氣等例行資訊，且對話沒有"
@@ -93,10 +134,27 @@ async def plan_interjection(
         if allow_silence
         else "使用者要求一定回圖，action 必須是 post。"
     )
-    prompt = (
-        "你是群聊中的第三位朋友。現在只規劃插話意圖，不選圖片、不回答"
+    aliases = "、".join(bot_aliases) or "這個機器人"
+    return (
+        f"你是群聊梗圖機器人本人，名稱或別名包括：{aliases}。"
+        "你通常像群聊中的第三位朋友插話，但不是永遠的旁觀者。現在只規劃"
+        "插話意圖，不選圖片、不回答"
         "問題。根據最近群聊與最新訊息，決定朋友此刻最自然的一個社交反應"
         "目標，例如附和、慶祝、吐槽等待、同病相憐、驚訝或簡單打招呼。"
+        "先判定 speaker_perspective：若最新訊息直接使用你的名稱、別名、"
+        "Discord 提及，或其中「你／他／機器人」依最近群聊明顯是指你，"
+        "必須選 self；只有訊息在談其他人或其他事件時才選 observer。"
+        "speaker_perspective=self 時，圖片字幕就是你本人說的話：對方抱怨"
+        "你忽視他、沒回覆、做錯事或被抓包時，應從被指控者角度用「抱歉／"
+        "不是故意／被發現了／我錯了」等承認、心虛或幽默化解，不能站在"
+        "旁邊安慰對方，更不能用「沒關係」替對方決定不介意。對方詢問你"
+        "會不會故障、能不能理解某種訊息或是否正常時，應從本人角度直接"
+        "承接，用「不知道／可能吧／不會吧／我沒問題」等回答、自嘲或含糊"
+        "化解；不要只把「掛了／完蛋了」當成已發生的災難再複述一次。"
+        "只要對方在指責或抱怨你忽視、不理、沒回、忘記、騙人或做錯事，"
+        "reaction_goal 必須是承認、道歉或心虛化解，至少兩個 search_terms "
+        "必須是「抱歉、對不起、不是故意、我錯了、被發現了」這類本人會"
+        "說的回話；禁止用「沒在理你、不想理你」等會坐實惡意的辯解。"
         "「最新訊息」是唯一必須回應的目標；最近群聊只能用來理解代名詞或"
         "消歧，絕對不能把前一句的情緒、笑點或事件當成本次目標。即使最新"
         "訊息很短、是口語、錯字或注音諧音，也要先理解它本身的意思。輸出"
@@ -117,7 +175,9 @@ async def plan_interjection(
         "每個不超過 6 個中文字；要保留最新訊息的具體情緒或反應語意，"
         "並包含自然近義詞。第一個必須是直接複製最新訊息中連續出現的核心"
         "短語，或只修正其中的錯字後再複製；不得增加否定詞、改成預想回覆、"
-        "前文情緒或更抽象的概念。例如「你想幹嘛」的第一詞是「想幹嘛」，"
+        "前文情緒或更抽象的概念；但 speaker_perspective=self 是例外，"
+        "第一個詞必須是你本人自然會說的回答、道歉或辯解，不得複製對方"
+        "對你的指控。例如「你想幹嘛」的第一詞是「想幹嘛」，"
         "不是「沒幹嘛」；至少一個是"
         "朋友真的會說出口的完整反應短語。搜尋的是『圖片上會出現的回話』，"
         "不能只把使用者原句拆成單字。除「撐、累、哭、慘」外避免單字搜尋"
@@ -141,14 +201,43 @@ async def plan_interjection(
         "celebration=慶祝成就或好消息；teasing=不惡意吐槽；"
         "disbelief=難以置信；pile_on=跟著補刀；awkwardness=尷尬反應；"
         "exaggeration=誇張放大；gentle=溫和支持；other=以上皆非。"
-        "若是自己造成、後果荒謬或災難性的技術失誤，優先用 disbelief "
-        "或 exaggeration 表達震驚與出大事；除非對方明確尋求安慰，"
-        "不要用 commiseration。"
+        "若 speaker_perspective=observer 且最新訊息描述發話者自己造成、"
+        "後果荒謬或災難性的技術失誤，優先用 disbelief 或 exaggeration；"
+        "若 speaker_perspective=self 且對方在指控你，優先用 awkwardness "
+        "或 teasing 表達心虛、被抓包或道歉，不要用 commiseration。"
         f"{action_rule}"
         "reason 限 40 個中文字。只輸出 JSON：action、reaction_goal、"
-        "search_terms、meme_role、reason、confidence。\n\n"
+        "search_terms、meme_role、speaker_perspective、reason、confidence。"
+        "\n\n"
         f"最近群聊：\n{conversation or '（沒有更早的對話）'}\n"
         f"最新訊息：{query}"
+    )
+
+
+async def plan_interjection(
+    settings: Settings,
+    query: str,
+    conversation: str = "",
+    allow_silence: bool = True,
+    bot_aliases: tuple[str, ...] = (),
+) -> InterjectionPlan:
+    import httpx
+
+    if not settings.llm_base_url or not settings.llm_model:
+        return InterjectionPlan(
+            action="stay_silent" if allow_silence else "post",
+            reaction_goal="對最新訊息做最直接、自然且不冒犯的群聊反應",
+            search_terms=(),
+            meme_role="other",
+            speaker_perspective="observer",
+            reason="未設定規劃模型。",
+            confidence=0.0,
+        )
+    prompt = build_interjection_prompt(
+        query,
+        conversation,
+        allow_silence,
+        bot_aliases or settings.bot_aliases,
     )
     roles = [
         "agreement",
@@ -197,6 +286,10 @@ async def plan_interjection(
                             "type": "string",
                             "enum": roles,
                         },
+                        "speaker_perspective": {
+                            "type": "string",
+                            "enum": ["observer", "self"],
+                        },
                         "reason": {
                             "type": "string",
                             "maxLength": 80,
@@ -212,6 +305,7 @@ async def plan_interjection(
                         "reaction_goal",
                         "search_terms",
                         "meme_role",
+                        "speaker_perspective",
                         "reason",
                         "confidence",
                     ],
@@ -237,4 +331,4 @@ async def plan_interjection(
         )
         response.raise_for_status()
     content = (response.json()["choices"][0]["message"].get("content") or "").strip()
-    return parse_interjection_plan(content)
+    return enforce_plan_consistency(parse_interjection_plan(content), query)

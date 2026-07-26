@@ -46,6 +46,7 @@ def select_fused_candidate(
     conversation: str = "",
     reaction_goal: str = "",
     anchor_term: str = "",
+    speaker_perspective: str = "observer",
 ) -> tuple[int, str] | None:
     if not results:
         return None
@@ -54,7 +55,11 @@ def select_fused_candidate(
         for index, text in enumerate(candidate_texts):
             if normalized_query and normalized_query in _normalize_lexical(text):
                 return index, "greeting_lexical"
-    perspective = "contextual" if meme_role in CONTEXTUAL_ROLES else "reaction"
+    perspective = (
+        "reaction"
+        if speaker_perspective == "self"
+        else "contextual" if meme_role in CONTEXTUAL_ROLES else "reaction"
+    )
     rank_field = f"{perspective}_rank"
     score_field = f"{perspective}_score"
     ranked_indexes = sorted(
@@ -115,6 +120,17 @@ def _normalize_lexical(text: str) -> str:
 
 def candidate_text_key(text: str) -> str:
     return _normalize_lexical(text)
+
+
+def mentions_speaker_alias(text: str, aliases: Sequence[str]) -> bool:
+    normalized_text = _normalize_lexical(text)
+    return any(
+        normalized_alias in normalized_text
+        for normalized_alias in (
+            _normalize_lexical(alias) for alias in aliases
+        )
+        if len(normalized_alias) >= 3
+    )
 
 
 def _has_ungrounded_reference(text: str, context: str) -> bool:
@@ -183,9 +199,16 @@ def contextual_reranker_query(
     query: str,
     conversation: str = "",
     reaction_goal: str = "",
+    speaker_perspective: str = "observer",
 ) -> str:
+    perspective = (
+        "候選字幕是被談論的機器人本人所說，必須像當事人的回答；"
+        if speaker_perspective == "self"
+        else "候選字幕是群聊朋友對其他人或事件的反應；"
+    )
     return (
-        "判斷候選字幕能否原封不動成為群聊第三位朋友的反應圖，整句需"
+        f"判斷候選字幕能否原封不動成為目前群聊插話者的反應圖；{perspective}"
+        "整句需"
         "自然且直接相關。最新訊息是唯一要回應的目標；前一句只能消歧。"
         "若需腦補未提事件或情緒、點名對話外人物、回答未問問題，判為無關。"
         f"\n最近對話：{conversation or '無'}"
@@ -198,9 +221,16 @@ def reaction_reranker_query(
     conversation: str = "",
     reaction_goal: str = "",
     meme_role: str = "other",
+    speaker_perspective: str = "observer",
 ) -> str:
+    perspective = (
+        "候選字幕是被談論的機器人本人所說，必須像當事人的回答；"
+        if speaker_perspective == "self"
+        else "候選字幕是群聊朋友對其他人或事件的反應；"
+    )
     return (
-        "判斷候選字幕能否原封不動成為群聊第三位朋友的 reaction meme。"
+        f"判斷候選字幕能否原封不動成為目前群聊插話者的 reaction meme；"
+        f"{perspective}"
         "最新訊息是唯一要回應的目標；前一句只能消歧。允許附和、反話"
         "與誇張，但整句要直接自然。若需腦補未提事件或情緒、點名對話"
         "外人物、回答未問問題，判為無關。"
@@ -366,6 +396,7 @@ async def rerank_candidate_perspectives(
     reaction_goal: str = "",
     meme_role: str = "other",
     anchor_terms: str | Sequence[str] = (),
+    speaker_perspective: str = "observer",
 ) -> list[FusedRerankResult]:
     if not settings.reranker_base_url:
         return []
@@ -377,10 +408,15 @@ async def rerank_candidate_perspectives(
         )
         if direct_greetings:
             return direct_greetings
-    if meme_role in CONTEXTUAL_ROLES:
+    if meme_role in CONTEXTUAL_ROLES and speaker_perspective != "self":
         contextual = await _request_rerank(
             settings,
-            contextual_reranker_query(query, conversation, reaction_goal),
+            contextual_reranker_query(
+                query,
+                conversation,
+                reaction_goal,
+                speaker_perspective,
+            ),
             candidates,
         )
         reaction = []
@@ -393,6 +429,7 @@ async def rerank_candidate_perspectives(
                 conversation,
                 reaction_goal,
                 meme_role,
+                speaker_perspective,
             ),
             candidates,
         )

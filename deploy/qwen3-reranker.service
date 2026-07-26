@@ -11,7 +11,7 @@ ExecStart=/opt/llama.cpp-embed/build-embed/bin/llama-server \
   -m /opt/models/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf \
   --host 192.168.10.102 --port 8083 \
   --embedding --pooling rank --rerank \
-  -c 512 -np 1 -b 256 -ub 256
+  -c 512 -np 1 -b 512 -ub 512
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=120

@@ -21,26 +21,40 @@ def _headers(api_key: str):
     return headers
 
 
-def meme_retrieval_queries(text: str, conversation: str = "") -> list[str]:
+def meme_retrieval_queries(
+    text: str,
+    conversation: str = "",
+    reaction_goal: str = "",
+) -> list[str]:
     context = f"\n最近群聊：\n{conversation}" if conversation else ""
-    return [
+    goal = f"\n這次希望的反應：{reaction_goal}" if reaction_goal else ""
+    broad_queries = [
         (
             "尋找一張第三位朋友能丟進群聊附和或補刀的 reaction meme；"
-            f"針對最新訊息做輕微吐槽或反諷：{text}{context}"
+            f"針對最新訊息做輕微吐槽或反諷：{text}{context}{goal}"
         ),
         (
             "尋找一張旁觀朋友能用來製造荒謬反差的網路梗圖；"
-            f"不要把它當成問答，針對最新訊息插話：{text}{context}"
+            f"不要把它當成問答，針對最新訊息插話：{text}{context}{goal}"
         ),
         (
             "尋找一張適合群組聊天的誇張反應圖；"
-            f"以戲劇化方式附和、驚訝或同情最新訊息：{text}{context}"
+            f"以戲劇化方式附和、驚訝或同情最新訊息：{text}{context}{goal}"
         ),
         (
             "尋找一張朋友能自然插入群聊的迷因；"
-            f"可以補刀、起鬨、幸災樂禍或冷面吐槽但不可惡意攻擊：{text}{context}"
+            f"可以補刀、起鬨、幸災樂禍或冷面吐槽但不可惡意攻擊：{text}{context}{goal}"
         ),
     ]
+    if not reaction_goal:
+        return broad_queries
+    direct_goal_query = (
+        "尋找一句能直接完成指定群聊反應的圖片字幕；字幕本身必須自然"
+        "表達這個反應，不得只靠圖片背景或硬拗。"
+        f"\n指定群聊反應：{reaction_goal}"
+        f"\n最新訊息：{text}{context}"
+    )
+    return [direct_goal_query, *broad_queries]
 
 
 async def request_embeddings(

@@ -1,0 +1,11 @@
+[Unit]
+Description=Proxy CT108 embedding requests to local Nemotron
+Requires=nemotron-embedding-proxy.socket
+After=nemotron-embedding.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:8081
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

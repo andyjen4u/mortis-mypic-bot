@@ -49,6 +49,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_model: str
+    final_judge_enabled: bool
     embedding_base_url: str
     embedding_api_key: str
     embedding_model: str
@@ -102,6 +103,7 @@ class Settings:
             llm_base_url=os.getenv("LLM_BASE_URL", "").rstrip("/"),
             llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
             llm_model=os.getenv("LLM_MODEL", "").strip(),
+            final_judge_enabled=_bool("FINAL_JUDGE_ENABLED", False),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL", "").rstrip("/"),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY", "").strip(),
             embedding_model=os.getenv("EMBEDDING_MODEL", "").strip(),
@@ -110,7 +112,7 @@ class Settings:
             reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
             retrieval_pool_size=max(
                 12,
-                int(os.getenv("RETRIEVAL_POOL_SIZE", "48")),
+                int(os.getenv("RETRIEVAL_POOL_SIZE", "16")),
             ),
             reranker_top_n=max(
                 1,

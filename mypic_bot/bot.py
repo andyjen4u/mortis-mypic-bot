@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict, deque
-from dataclasses import replace
 import logging
 import time
 from pathlib import Path
@@ -18,14 +17,20 @@ from .database import (
     connect,
     get_reply_policy,
     search,
+    search_by_terms,
     set_reply_policy,
 )
 from .decision_log import append_decision
 from .embeddings import SemanticIndex, meme_retrieval_queries, request_embeddings
 from .images import download_one
 from .llm import CandidateChoice, choose_candidate
+from .planner import InterjectionPlan, plan_interjection
 from .policy import is_low_signal_message, policy_summary, should_post_choice
-from .reranker import credible_rerank_results, rerank_candidates
+from .reranker import (
+    candidate_text_key,
+    rerank_candidate_perspectives,
+    select_fused_candidate,
+)
 
 
 class MyPicClient(discord.Client):
@@ -74,6 +79,15 @@ class MyPicClient(discord.Client):
             self.settings.decision_log_path,
         )
         logging.info(
+            "Interjection planner endpoint=%s model=%s",
+            self.settings.llm_base_url or "disabled",
+            self.settings.llm_model or "default",
+        )
+        logging.info(
+            "Final LLM candidate judge enabled=%s",
+            self.settings.final_judge_enabled,
+        )
+        logging.info(
             "Cross-encoder reranker endpoint=%s model=%s pool=%s top_n=%s",
             self.settings.reranker_base_url or "disabled",
             self.settings.reranker_model or "default",
@@ -106,18 +120,123 @@ class MyPicClient(discord.Client):
         activity: str = "medium",
         mentioned: bool = False,
     ) -> Path | None:
+        selection_id = str(uuid4())
+        allow_silence = mode == "auto" and not mentioned
+        if allow_silence and self.selection_lock.locked():
+            await self.write_decision(
+                {
+                    "selection_id": selection_id,
+                    "query": query,
+                    "context": context or {},
+                    "conversation": conversation,
+                    "policy": {
+                        "mode": mode,
+                        "activity": activity,
+                        "mentioned": mentioned,
+                        "gate_reason": "busy_skip",
+                    },
+                    "timings_ms": {"queue": 0.0, "total": 0.0},
+                    "result": {"status": "stayed_silent"},
+                }
+            )
+            logging.info(
+                "Selection %s skipped because another selection is running",
+                selection_id,
+            )
+            return None
+        queued_at = time.perf_counter()
         async with self.selection_lock:
-            selection_id = str(uuid4())
-            retrieval_queries = meme_retrieval_queries(query, conversation)
+            selection_started = time.perf_counter()
+            timings = {"queue": selection_started - queued_at}
+
+            def timing_snapshot() -> dict[str, float]:
+                snapshot = {
+                    **timings,
+                    "total": time.perf_counter() - selection_started,
+                }
+                return {
+                    name: round(seconds * 1000, 1)
+                    for name, seconds in snapshot.items()
+                }
+
+            planner_started = time.perf_counter()
+            try:
+                plan = await plan_interjection(
+                    self.settings,
+                    query,
+                    conversation,
+                    allow_silence=allow_silence,
+                )
+                planner_error = None
+            except Exception as error:
+                planner_error = f"{type(error).__name__}: {error}"
+                logging.exception("Interjection planning failed")
+                plan = InterjectionPlan(
+                    action="stay_silent" if allow_silence else "post",
+                    reaction_goal="對最新訊息做最直接、自然且不冒犯的群聊反應",
+                    search_terms=(),
+                    meme_role="other",
+                    reason="規劃模型失敗。",
+                    confidence=0.0,
+                )
+            timings["planner"] = time.perf_counter() - planner_started
+            plan_post, plan_gate_reason = should_post_choice(
+                mode=mode,
+                activity=activity,
+                mentioned=mentioned,
+                action=plan.action,
+                confidence=plan.confidence,
+            )
+            if not plan_post:
+                await self.write_decision(
+                    {
+                        "selection_id": selection_id,
+                        "query": query,
+                        "context": context or {},
+                        "conversation": conversation,
+                        "policy": {
+                            "mode": mode,
+                            "activity": activity,
+                            "mentioned": mentioned,
+                            "gate_reason": plan_gate_reason,
+                        },
+                        "planner": {
+                            "model": self.settings.llm_model,
+                            "action": plan.action,
+                            "reaction_goal": plan.reaction_goal,
+                            "search_terms": list(plan.search_terms),
+                            "meme_role": plan.meme_role,
+                            "reason": plan.reason,
+                            "confidence": plan.confidence,
+                            "error": planner_error,
+                        },
+                        "timings_ms": timing_snapshot(),
+                        "candidates": [],
+                        "result": {"status": "stayed_silent"},
+                    }
+                )
+                return None
+
+            retrieval_started = time.perf_counter()
+            timings["embedding"] = 0.0
+            retrieval_queries = meme_retrieval_queries(
+                query,
+                conversation,
+                plan.reaction_goal,
+            )
             candidates = []
             candidate_scores: list[float | None] = []
             candidate_query_indexes: list[int | None] = []
             candidate_query_ranks: list[int | None] = []
             candidate_pool_indexes: list[int] = []
-            candidate_reranker_scores: list[float | None] = []
+            candidate_contextual_scores: list[float | None] = []
+            candidate_reaction_scores: list[float | None] = []
+            candidate_contextual_ranks: list[int | None] = []
+            candidate_reaction_ranks: list[int | None] = []
             retrieval_mode = "text"
             retrieval_error = None
             if self.semantic_index is not None and self.settings.embedding_base_url:
+                embedding_started = time.perf_counter()
                 try:
                     query_vectors = await request_embeddings(
                         self.settings,
@@ -155,6 +274,57 @@ class MyPicClient(discord.Client):
                 except Exception as error:
                     retrieval_error = f"{type(error).__name__}: {error}"
                     logging.exception("Semantic retrieval failed; using text search")
+                finally:
+                    timings["embedding"] = (
+                        time.perf_counter() - embedding_started
+                    )
+            lexical_candidates = search_by_terms(
+                self.connection,
+                plan.search_terms,
+                limit=min(12, self.settings.retrieval_pool_size),
+            )
+            if lexical_candidates:
+                semantic_records_by_id = {
+                    candidate["segment_id"]: (
+                        candidate,
+                        score,
+                        query_index,
+                        query_rank,
+                    )
+                    for candidate, score, query_index, query_rank in zip(
+                        candidates,
+                        candidate_scores,
+                        candidate_query_indexes,
+                        candidate_query_ranks,
+                    )
+                }
+                merged_records = []
+                seen_segment_ids = set()
+                for lexical_rank, candidate in enumerate(lexical_candidates):
+                    segment_id = candidate["segment_id"]
+                    if segment_id in seen_segment_ids:
+                        continue
+                    seen_segment_ids.add(segment_id)
+                    semantic_record = semantic_records_by_id.get(segment_id)
+                    if semantic_record is None:
+                        merged_records.append(
+                            (candidate, None, -1, lexical_rank)
+                        )
+                    else:
+                        merged_records.append(semantic_record)
+                for semantic_record in semantic_records_by_id.values():
+                    segment_id = semantic_record[0]["segment_id"]
+                    if segment_id in seen_segment_ids:
+                        continue
+                    seen_segment_ids.add(segment_id)
+                    merged_records.append(semantic_record)
+                    if len(merged_records) >= self.settings.retrieval_pool_size:
+                        break
+                candidates = [record[0] for record in merged_records]
+                candidate_scores = [record[1] for record in merged_records]
+                candidate_query_indexes = [record[2] for record in merged_records]
+                candidate_query_ranks = [record[3] for record in merged_records]
+                retrieval_mode = f"{retrieval_mode}+lexical"
             if not candidates:
                 candidates = search(
                     self.connection,
@@ -165,17 +335,54 @@ class MyPicClient(discord.Client):
                 candidate_query_indexes = [None] * len(candidates)
                 candidate_query_ranks = [None] * len(candidates)
                 retrieval_mode = "text"
+            unique_candidate_records = []
+            seen_candidate_texts = set()
+            for candidate, score, query_index, query_rank in zip(
+                candidates,
+                candidate_scores,
+                candidate_query_indexes,
+                candidate_query_ranks,
+            ):
+                text_key = candidate_text_key(candidate["text"])
+                if text_key and text_key in seen_candidate_texts:
+                    continue
+                if text_key:
+                    seen_candidate_texts.add(text_key)
+                unique_candidate_records.append(
+                    (candidate, score, query_index, query_rank)
+                )
+            candidates = [record[0] for record in unique_candidate_records]
+            candidate_scores = [record[1] for record in unique_candidate_records]
+            candidate_query_indexes = [
+                record[2] for record in unique_candidate_records
+            ]
+            candidate_query_ranks = [
+                record[3] for record in unique_candidate_records
+            ]
+            timings["retrieval"] = time.perf_counter() - retrieval_started
             if not candidates:
                 await self.write_decision(
                     {
                         "selection_id": selection_id,
                         "query": query,
                         "context": context or {},
+                        "conversation": conversation,
+                        "planner": {
+                            "model": self.settings.llm_model,
+                            "action": plan.action,
+                            "reaction_goal": plan.reaction_goal,
+                            "search_terms": list(plan.search_terms),
+                            "meme_role": plan.meme_role,
+                            "reason": plan.reason,
+                            "confidence": plan.confidence,
+                            "error": planner_error,
+                        },
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
                             "error": retrieval_error,
                         },
+                        "timings_ms": timing_snapshot(),
                         "candidates": [],
                         "result": {"status": "no_candidates"},
                     }
@@ -201,37 +408,48 @@ class MyPicClient(discord.Client):
             ]
             cross_encoder_error = None
             rerank_results = []
-            reranker_band_minimum = None
-            reranker_returned_count = 0
+            reranker_started = time.perf_counter()
             if self.settings.reranker_base_url:
                 try:
-                    rerank_results = await rerank_candidates(
+                    rerank_results = await rerank_candidate_perspectives(
                         self.settings,
                         query,
                         candidates,
                         conversation,
+                        plan.reaction_goal,
+                        plan.meme_role,
+                        plan.search_terms,
                     )
                 except Exception as error:
                     cross_encoder_error = f"{type(error).__name__}: {error}"
                     logging.exception(
                         "Cross-encoder reranking failed; using retrieval order"
                     )
+            timings["reranker"] = time.perf_counter() - reranker_started
             if rerank_results:
-                reranker_returned_count = len(rerank_results)
-                rerank_results, reranker_band_minimum = credible_rerank_results(
-                    rerank_results
-                )
                 selected_pool_indexes = [
                     result.original_index for result in rerank_results
                 ]
-                candidate_reranker_scores = [
-                    result.score for result in rerank_results
+                candidate_contextual_scores = [
+                    result.contextual_score for result in rerank_results
+                ]
+                candidate_reaction_scores = [
+                    result.reaction_score for result in rerank_results
+                ]
+                candidate_contextual_ranks = [
+                    result.contextual_rank for result in rerank_results
+                ]
+                candidate_reaction_ranks = [
+                    result.reaction_rank for result in rerank_results
                 ]
             else:
                 selected_pool_indexes = list(
-                    range(min(self.settings.reranker_top_n, len(candidates)))
+                    range(min(self.settings.reranker_top_n * 2, len(candidates)))
                 )
-                candidate_reranker_scores = [None] * len(selected_pool_indexes)
+                candidate_contextual_scores = [None] * len(selected_pool_indexes)
+                candidate_reaction_scores = [None] * len(selected_pool_indexes)
+                candidate_contextual_ranks = [None] * len(selected_pool_indexes)
+                candidate_reaction_ranks = [None] * len(selected_pool_indexes)
             candidate_pool_indexes = selected_pool_indexes
             candidates = [candidates[index] for index in selected_pool_indexes]
             candidate_scores = [
@@ -250,7 +468,10 @@ class MyPicClient(discord.Client):
                 query_index,
                 query_rank,
                 pool_index,
-                reranker_score,
+                contextual_score,
+                reaction_score,
+                contextual_rank,
+                reaction_rank,
             ) in enumerate(
                 zip(
                     candidates,
@@ -258,7 +479,10 @@ class MyPicClient(discord.Client):
                     candidate_query_indexes,
                     candidate_query_ranks,
                     candidate_pool_indexes,
-                    candidate_reranker_scores,
+                    candidate_contextual_scores,
+                    candidate_reaction_scores,
+                    candidate_contextual_ranks,
+                    candidate_reaction_ranks,
                 )
             ):
                 candidate_records.append(
@@ -270,59 +494,77 @@ class MyPicClient(discord.Client):
                         "retrieval_query_index": query_index,
                         "retrieval_rank": query_rank,
                         "retrieval_pool_index": pool_index,
-                        "reranker_score": reranker_score,
+                        "contextual_reranker_score": contextual_score,
+                        "reaction_reranker_score": reaction_score,
+                        "contextual_reranker_rank": contextual_rank,
+                        "reaction_reranker_rank": reaction_rank,
                         "season": candidate["season"],
                         "episode": candidate["episode"],
                         "frame_prefer": candidate["frame_prefer"],
                         "local_path": candidate["local_path"],
                     }
                 )
-            try:
-                choice = await choose_candidate(
-                    self.settings,
-                    query,
-                    candidates,
-                    conversation,
-                    allow_silence=(mode == "auto" and not mentioned),
+            routed = select_fused_candidate(
+                rerank_results,
+                plan.meme_role,
+                query,
+                [candidate["text"] for candidate in candidates],
+                conversation,
+                plan.reaction_goal,
+                plan.search_terms[0] if plan.search_terms else "",
+            )
+            if routed is not None:
+                fallback_index, fallback_perspective = routed
+                fallback_choice = CandidateChoice(
+                    action="post",
+                    index=fallback_index,
+                    reason=(
+                        f"{plan.reaction_goal}；採用"
+                        f"{'對話關聯' if fallback_perspective == 'contextual' else '梗圖反應'}"
+                        "排序第一名。"
+                    ),
+                    meme_role=plan.meme_role,
+                    confidence=plan.confidence,
                 )
-                llm_error = None
-            except Exception as error:
-                llm_error = f"{type(error).__name__}: {error}"
-                logging.exception("LLM reranking failed; using first candidate")
-                choice = CandidateChoice(
-                    action="post" if mode != "auto" or mentioned else "stay_silent",
+            else:
+                fallback_choice = CandidateChoice(
+                    action="post" if not allow_silence else "stay_silent",
                     index=0,
-                    reason="模型重排失敗，使用檢索排序第一名。",
-                    meme_role="rerank_fallback",
+                    reason="角色重排失敗，使用檢索排序第一名。",
+                    meme_role="retrieval_fallback",
                     confidence=0.0,
                 )
-
-            score_guard = None
-            if (
-                choice.index != 0
-                and candidate_reranker_scores
-                and candidate_reranker_scores[0] is not None
-                and candidate_reranker_scores[choice.index] is not None
-            ):
-                top_score = candidate_reranker_scores[0]
-                chosen_score = candidate_reranker_scores[choice.index]
-                minimum_score = max(top_score * 0.70, top_score - 0.15)
-                if chosen_score < minimum_score:
-                    score_guard = {
-                        "original_index": choice.index,
-                        "original_score": chosen_score,
-                        "replacement_index": 0,
-                        "replacement_score": top_score,
-                        "minimum_allowed_score": minimum_score,
-                    }
-                    choice = replace(
-                        choice,
-                        index=0,
-                        reason=(
-                            f"{choice.reason}；候選分數落差過大，改用 cross-encoder "
-                            "第一名。"
-                        ),
+                fallback_perspective = "retrieval_fallback"
+            final_judge_started = time.perf_counter()
+            use_final_judge = (
+                self.settings.final_judge_enabled or not rerank_results
+            )
+            if use_final_judge:
+                try:
+                    choice = await choose_candidate(
+                        self.settings,
+                        query,
+                        candidates,
+                        conversation,
+                        allow_silence=allow_silence,
+                        reaction_goal=plan.reaction_goal,
                     )
+                    selected_perspective = "gemma_final_judge"
+                    selector_error = None
+                except Exception as error:
+                    selector_error = f"{type(error).__name__}: {error}"
+                    logging.exception(
+                        "Final candidate judge failed; using deterministic fallback"
+                    )
+                    choice = fallback_choice
+                    selected_perspective = fallback_perspective
+            else:
+                choice = fallback_choice
+                selected_perspective = fallback_perspective
+                selector_error = None
+            timings["final_judge"] = (
+                time.perf_counter() - final_judge_started
+            )
 
             should_post, gate_reason = should_post_choice(
                 mode=mode,
@@ -344,6 +586,16 @@ class MyPicClient(discord.Client):
                             "mentioned": mentioned,
                             "gate_reason": gate_reason,
                         },
+                        "planner": {
+                            "model": self.settings.llm_model,
+                            "action": plan.action,
+                            "reaction_goal": plan.reaction_goal,
+                            "search_terms": list(plan.search_terms),
+                            "meme_role": plan.meme_role,
+                            "reason": plan.reason,
+                            "confidence": plan.confidence,
+                            "error": planner_error,
+                        },
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
@@ -354,32 +606,34 @@ class MyPicClient(discord.Client):
                         "candidates": candidate_records,
                         "cross_encoder": {
                             "model": self.settings.reranker_model,
-                            "returned_count": reranker_returned_count,
+                            "strategy": "planner_role_single_perspective",
                             "selected_count": len(candidates),
-                            "credible_band_minimum": reranker_band_minimum,
                             "error": cross_encoder_error,
                         },
                         "llm_reranker": {
                             "model": self.settings.llm_model,
+                            "perspective": selected_perspective,
                             "action": choice.action,
                             "selected_index": choice.index,
                             "reason": choice.reason,
                             "meme_role": choice.meme_role,
                             "confidence": choice.confidence,
-                            "score_guard": score_guard,
-                            "error": llm_error,
+                            "error": selector_error,
                         },
+                        "timings_ms": timing_snapshot(),
                         "result": {"status": "stayed_silent"},
                     }
                 )
                 logging.info(
-                    "Selection %s stayed silent reason=%s confidence=%.3f",
+                    "Selection %s stayed silent reason=%s confidence=%.3f timings_ms=%s",
                     selection_id,
                     gate_reason,
                     choice.confidence,
+                    timing_snapshot(),
                 )
                 return None
 
+            image_started = time.perf_counter()
             selected = candidates[choice.index]
             local_path = selected["local_path"]
             if local_path and Path(local_path).is_file():
@@ -400,6 +654,7 @@ class MyPicClient(discord.Client):
                         semaphore,
                     )
                 image_source = "download"
+            timings["image"] = time.perf_counter() - image_started
 
             await self.write_decision(
                 {
@@ -413,6 +668,16 @@ class MyPicClient(discord.Client):
                         "mentioned": mentioned,
                         "gate_reason": gate_reason,
                     },
+                    "planner": {
+                        "model": self.settings.llm_model,
+                        "action": plan.action,
+                        "reaction_goal": plan.reaction_goal,
+                        "search_terms": list(plan.search_terms),
+                        "meme_role": plan.meme_role,
+                        "reason": plan.reason,
+                        "confidence": plan.confidence,
+                        "error": planner_error,
+                    },
                     "retrieval": {
                         "mode": retrieval_mode,
                         "queries": retrieval_queries,
@@ -423,21 +688,21 @@ class MyPicClient(discord.Client):
                     "candidates": candidate_records,
                     "cross_encoder": {
                         "model": self.settings.reranker_model,
-                        "returned_count": reranker_returned_count,
+                        "strategy": "planner_role_single_perspective",
                         "selected_count": len(candidates),
-                        "credible_band_minimum": reranker_band_minimum,
                         "error": cross_encoder_error,
                     },
                     "llm_reranker": {
                         "model": self.settings.llm_model,
+                        "perspective": selected_perspective,
                         "action": choice.action,
                         "selected_index": choice.index,
                         "reason": choice.reason,
                         "meme_role": choice.meme_role,
                         "confidence": choice.confidence,
-                        "score_guard": score_guard,
-                        "error": llm_error,
+                        "error": selector_error,
                     },
+                    "timings_ms": timing_snapshot(),
                     "result": {
                         "status": "selected",
                         "segment_id": selected["segment_id"],
@@ -447,11 +712,12 @@ class MyPicClient(discord.Client):
                 }
             )
             logging.info(
-                "Selection %s chose candidate=%s segment_id=%s reason=%s",
+                "Selection %s chose candidate=%s segment_id=%s reason=%s timings_ms=%s",
                 selection_id,
                 choice.index,
                 selected["segment_id"],
                 choice.reason,
+                timing_snapshot(),
             )
             return path
 

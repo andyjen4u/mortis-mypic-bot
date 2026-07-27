@@ -188,7 +188,8 @@ class RerankerTests(unittest.TestCase):
     def test_contextual_query_emphasizes_grounded_relationship(self):
         query = contextual_reranker_query("你好", "Andy: 剛上線")
         self.assertIn("自然且直接相關", query)
-        self.assertIn("唯一要回應", query)
+        self.assertIn("最新訊息是要接的話", query)
+        self.assertIn("延續中的主題", query)
         self.assertIn("Andy: 剛上線", query)
         self.assertIn("你好", query)
 
@@ -201,7 +202,8 @@ class RerankerTests(unittest.TestCase):
         )
         self.assertIn("接住主管要求大家再撐一下的壓迫感", query)
         self.assertIn("同病相憐", query)
-        self.assertIn("前一句", query)
+        self.assertIn("延續中的主題", query)
+        self.assertIn("無關舊話題", query)
 
     def test_self_perspective_requires_candidate_to_speak_as_bot(self):
         query = reaction_reranker_query(

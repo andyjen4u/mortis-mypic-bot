@@ -39,6 +39,18 @@ SELF_ACCOUNTABILITY_CUES = (
     "做錯",
 )
 SELF_ACCOUNTABILITY_TERMS = ("抱歉", "不是故意", "被發現了", "我錯了")
+OBSERVER_ROLE_SEARCH_TERMS = {
+    "greeting": ("你好", "早安", "晚安"),
+    "agreement": ("沒錯", "就是這樣", "對啊"),
+    "commiseration": ("好慘", "辛苦了", "受不了"),
+    "celebration": ("恭喜", "好厲害", "太好了"),
+    "teasing": ("又來了", "真的假的", "太扯了", "不愧是"),
+    "disbelief": ("真的假的", "不會吧", "怎麼可能"),
+    "pile_on": ("又來了", "太扯了", "不愧是"),
+    "awkwardness": ("好尷尬", "糟糕", "被發現了"),
+    "exaggeration": ("完蛋了", "太誇張", "不得了"),
+    "gentle": ("沒事", "加油", "辛苦了"),
+}
 
 
 def _normalize_search_term(value) -> str:
@@ -97,13 +109,19 @@ def parse_interjection_plan(content: str) -> InterjectionPlan:
 def enforce_plan_consistency(
     plan: InterjectionPlan,
     query: str,
+    conversation: str = "",
+    bot_aliases: tuple[str, ...] = (),
+    bot_addressed: bool | None = None,
 ) -> InterjectionPlan:
+    if (
+        plan.speaker_perspective == "self"
+        and bot_addressed is False
+        and not _text_refers_to_bot(query, conversation, bot_aliases)
+    ):
+        plan = replace(plan, speaker_perspective="observer")
     if plan.speaker_perspective != "self":
         return plan
-    accountability_context = " ".join(
-        (query, plan.reaction_goal, plan.reason)
-    )
-    if not any(cue in accountability_context for cue in SELF_ACCOUNTABILITY_CUES):
+    if not any(cue in query for cue in SELF_ACCOUNTABILITY_CUES):
         return plan
     return replace(
         plan,
@@ -116,11 +134,57 @@ def enforce_plan_consistency(
     )
 
 
+def expanded_search_terms(plan: InterjectionPlan) -> tuple[str, ...]:
+    if plan.speaker_perspective != "observer":
+        return plan.search_terms
+    return tuple(
+        dict.fromkeys(
+            (
+                *plan.search_terms,
+                *OBSERVER_ROLE_SEARCH_TERMS.get(plan.meme_role, ()),
+            )
+        )
+    )[:8]
+
+
+def _normalize_identity_text(value: str) -> str:
+    return "".join(character for character in value.lower() if character.isalnum())
+
+
+def _text_refers_to_bot(
+    query: str,
+    conversation: str,
+    bot_aliases: tuple[str, ...],
+) -> bool:
+    normalized_query = _normalize_identity_text(query)
+    normalized_conversation = _normalize_identity_text(conversation)
+    aliases = tuple(
+        normalized
+        for normalized in (
+            _normalize_identity_text(alias) for alias in bot_aliases
+        )
+        if len(normalized) >= 3
+    )
+    if any(alias in normalized_query for alias in aliases):
+        return True
+    bot_nouns = ("機器人", "bot", "機器狗")
+    if any(noun in query.lower() for noun in bot_nouns):
+        return True
+    has_identity_in_context = any(
+        alias in normalized_conversation for alias in aliases
+    ) or any(noun in conversation.lower() for noun in bot_nouns)
+    return has_identity_in_context and any(
+        pronoun in query for pronoun in ("他", "它", "你")
+    )
+
+
 def build_interjection_prompt(
     query: str,
     conversation: str = "",
     allow_silence: bool = True,
     bot_aliases: tuple[str, ...] = (),
+    latest_author: str = "",
+    bot_addressed: bool | None = None,
 ) -> str:
     action_rule = (
         "先嚴格判斷 action。下列情況必須 stay_silent："
@@ -135,31 +199,58 @@ def build_interjection_prompt(
         else "使用者要求一定回圖，action 必須是 post。"
     )
     aliases = "、".join(bot_aliases) or "這個機器人"
+    forced_observer = (
+        bot_addressed is False
+        and not _text_refers_to_bot(query, conversation, bot_aliases)
+    )
+    address_signal = {
+        True: "平台確認這則訊息在私訊、提及你，或直接回覆你的訊息。",
+        False: "平台確認這是群組的一般訊息，沒有提及你，也沒有回覆你。",
+        None: "平台無法確認這則訊息是否在對你說。",
+    }[bot_addressed]
+    perspective_rules = (
+        "硬限制：平台與前文已確定最新訊息不是對你說，其中「你」指其他"
+        "群友；speaker_perspective 必須是 observer。只能旁觀附和、補刀"
+        "或起鬨，不能代替對方用「抱歉／沒關係／不是故意」回答；可用"
+        "「又來了／不愧是你／真有錢」等第三方反應。"
+        if forced_observer
+        else (
+            "先判定 speaker_perspective：若最新訊息直接使用你的名稱、"
+            "別名、Discord 提及，或其中「你／他／機器人」依最近群聊明顯"
+            "是指你，必須選 self；只有訊息在談其他人或事件時才選 observer。"
+            "若平台確認群組訊息沒有提及或回覆你，單獨出現的第二人稱「你」"
+            "通常是在接前一位群友，不能因此判成 self；除非最新訊息明說"
+            "你的名稱、機器人身分，或前文清楚建立該代名詞就是你。"
+            "speaker_perspective=self 時，圖片字幕就是你本人說的話：對方"
+            "抱怨你忽視他、沒回覆、做錯事或被抓包時，應從被指控者角度用"
+            "「抱歉／不是故意／被發現了／我錯了」等承認、心虛或幽默化解，"
+            "不能站在旁邊安慰對方，更不能用「沒關係」替對方決定不介意。"
+            "對方詢問你會不會故障、能不能理解某種訊息或是否正常時，應從"
+            "本人角度直接承接，用「不知道／可能吧／不會吧／我沒問題」等"
+            "回答、自嘲或含糊化解；不要只把「掛了／完蛋了」當成已發生的"
+            "災難再複述一次。只要對方在指責或抱怨你忽視、不理、沒回、"
+            "忘記、騙人或做錯事，reaction_goal 必須是承認、道歉或心虛"
+            "化解，至少兩個 search_terms 必須是「抱歉、對不起、不是故意、"
+            "我錯了、被發現了」這類本人會說的回話；禁止用「沒在理你、"
+            "不想理你」等會坐實惡意的辯解。"
+        )
+    )
     return (
         f"你是群聊梗圖機器人本人，名稱或別名包括：{aliases}。"
+        f"本次最新訊息作者：{latest_author or '未知'}。{address_signal}"
+        f"{perspective_rules}"
         "你通常像群聊中的第三位朋友插話，但不是永遠的旁觀者。現在只規劃"
         "插話意圖，不選圖片、不回答"
         "問題。根據最近群聊與最新訊息，決定朋友此刻最自然的一個社交反應"
         "目標，例如附和、慶祝、吐槽等待、同病相憐、驚訝或簡單打招呼。"
-        "先判定 speaker_perspective：若最新訊息直接使用你的名稱、別名、"
-        "Discord 提及，或其中「你／他／機器人」依最近群聊明顯是指你，"
-        "必須選 self；只有訊息在談其他人或其他事件時才選 observer。"
-        "speaker_perspective=self 時，圖片字幕就是你本人說的話：對方抱怨"
-        "你忽視他、沒回覆、做錯事或被抓包時，應從被指控者角度用「抱歉／"
-        "不是故意／被發現了／我錯了」等承認、心虛或幽默化解，不能站在"
-        "旁邊安慰對方，更不能用「沒關係」替對方決定不介意。對方詢問你"
-        "會不會故障、能不能理解某種訊息或是否正常時，應從本人角度直接"
-        "承接，用「不知道／可能吧／不會吧／我沒問題」等回答、自嘲或含糊"
-        "化解；不要只把「掛了／完蛋了」當成已發生的災難再複述一次。"
-        "只要對方在指責或抱怨你忽視、不理、沒回、忘記、騙人或做錯事，"
-        "reaction_goal 必須是承認、道歉或心虛化解，至少兩個 search_terms "
-        "必須是「抱歉、對不起、不是故意、我錯了、被發現了」這類本人會"
-        "說的回話；禁止用「沒在理你、不想理你」等會坐實惡意的辯解。"
-        "「最新訊息」是唯一必須回應的目標；最近群聊只能用來理解代名詞或"
-        "消歧，絕對不能把前一句的情緒、笑點或事件當成本次目標。即使最新"
-        "訊息很短、是口語、錯字或注音諧音，也要先理解它本身的意思。輸出"
-        "前必須檢查 reaction_goal 與 search_terms 是否都能只靠最新訊息"
-        "成立；若拿掉最近群聊就無法成立，表示你回錯句了，必須重做。"
+        "「最新訊息」是本次要接的話，但最近群聊是重要判斷依據：要用前"
+        "幾則辨認正在談的主題、人物、代名詞、對話方向、情緒與延續中的"
+        "笑點。若最新訊息是省略主詞的追問、承接句或吐槽，反應必須放回"
+        "整段對話才成立。前文可以補足最新訊息省略的資訊，但不能把已經"
+        "轉換掉的舊話題或無關情緒硬搬成本次目標。即使最新訊息很短、是"
+        "口語、錯字或注音諧音，也要結合前文理解它本身正在接什麼。輸出"
+        "前必須檢查 reaction_goal 與 search_terms 是否確實回應最新訊息，"
+        "並且與最近群聊建立的主題、人物關係和語氣一致。"
         "reaction_goal 必須是 30 個中文字內、可直接拿去搜尋字幕的一個"
         "目標，而且包含 1 至 3 個可能出現在字幕中的短語概念。格式為"
         "「用『短語／短語』接住哪個事實」，例如「用『厲害／恭喜』"
@@ -220,6 +311,8 @@ async def plan_interjection(
     conversation: str = "",
     allow_silence: bool = True,
     bot_aliases: tuple[str, ...] = (),
+    latest_author: str = "",
+    bot_addressed: bool | None = None,
 ) -> InterjectionPlan:
     import httpx
 
@@ -238,6 +331,8 @@ async def plan_interjection(
         conversation,
         allow_silence,
         bot_aliases or settings.bot_aliases,
+        latest_author,
+        bot_addressed,
     )
     roles = [
         "agreement",
@@ -256,7 +351,7 @@ async def plan_interjection(
         "model": settings.llm_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "max_tokens": 192,
+        "max_tokens": 256,
         "thinking_budget_tokens": 256,
         "response_format": {
             "type": "json_schema",
@@ -331,4 +426,10 @@ async def plan_interjection(
         )
         response.raise_for_status()
     content = (response.json()["choices"][0]["message"].get("content") or "").strip()
-    return enforce_plan_consistency(parse_interjection_plan(content), query)
+    return enforce_plan_consistency(
+        parse_interjection_plan(content),
+        query,
+        conversation,
+        bot_aliases or settings.bot_aliases,
+        bot_addressed,
+    )

@@ -24,7 +24,7 @@ from .decision_log import append_decision
 from .embeddings import SemanticIndex, meme_retrieval_queries, request_embeddings
 from .images import download_one
 from .llm import CandidateChoice, choose_candidate
-from .planner import InterjectionPlan, plan_interjection
+from .planner import InterjectionPlan, expanded_search_terms, plan_interjection
 from .policy import is_low_signal_message, policy_summary, should_post_choice
 from .reranker import (
     candidate_text_key,
@@ -129,6 +129,8 @@ class MyPicClient(discord.Client):
         mode: str = "always",
         activity: str = "medium",
         mentioned: bool = False,
+        latest_author: str = "",
+        bot_addressed: bool | None = None,
     ) -> Path | None:
         selection_id = str(uuid4())
         allow_silence = mode == "auto" and not mentioned
@@ -177,6 +179,8 @@ class MyPicClient(discord.Client):
                     conversation,
                     allow_silence=allow_silence,
                     bot_aliases=self.runtime_bot_aliases(),
+                    latest_author=latest_author,
+                    bot_addressed=bot_addressed,
                 )
                 planner_error = None
             except Exception as error:
@@ -292,9 +296,10 @@ class MyPicClient(discord.Client):
                     timings["embedding"] = (
                         time.perf_counter() - embedding_started
                     )
+            lexical_terms = expanded_search_terms(plan)
             lexical_candidates = search_by_terms(
                 self.connection,
-                plan.search_terms,
+                lexical_terms,
                 limit=min(12, self.settings.retrieval_pool_size),
             )
             if lexical_candidates:
@@ -404,6 +409,7 @@ class MyPicClient(discord.Client):
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
+                            "lexical_terms": list(lexical_terms),
                             "error": retrieval_error,
                         },
                         "timings_ms": timing_snapshot(),
@@ -442,7 +448,7 @@ class MyPicClient(discord.Client):
                         conversation,
                         plan.reaction_goal,
                         plan.meme_role,
-                        plan.search_terms,
+                        lexical_terms,
                         plan.speaker_perspective,
                     )
                 except Exception as error:
@@ -536,7 +542,7 @@ class MyPicClient(discord.Client):
                 [candidate["text"] for candidate in candidates],
                 conversation,
                 plan.reaction_goal,
-                plan.search_terms[0] if plan.search_terms else "",
+                lexical_terms[0] if lexical_terms else "",
                 plan.speaker_perspective,
             )
             if routed is not None:
@@ -627,6 +633,7 @@ class MyPicClient(discord.Client):
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
+                            "lexical_terms": list(lexical_terms),
                             "error": retrieval_error,
                             "pool_size": len(retrieval_records),
                             "candidates": retrieval_records,
@@ -710,6 +717,7 @@ class MyPicClient(discord.Client):
                     "retrieval": {
                         "mode": retrieval_mode,
                         "queries": retrieval_queries,
+                        "lexical_terms": list(lexical_terms),
                         "error": retrieval_error,
                         "pool_size": len(retrieval_records),
                         "candidates": retrieval_records,
@@ -768,6 +776,16 @@ class MyPicClient(discord.Client):
     def is_mentioned(self, message: discord.Message) -> bool:
         return self.user is not None and self.user in message.mentions
 
+    def is_reply_to_self(self, message: discord.Message) -> bool:
+        if self.user is None or message.reference is None:
+            return False
+        referenced = (
+            getattr(message.reference, "resolved", None)
+            or getattr(message.reference, "cached_message", None)
+        )
+        author = getattr(referenced, "author", None)
+        return author is not None and author.id == self.user.id
+
     def remember_message(self, message: discord.Message) -> list[dict[str, Any]]:
         key = (message.guild.id if message.guild else 0, message.channel.id)
         history = list(self.message_history[key])
@@ -807,6 +825,13 @@ class MyPicClient(discord.Client):
             return
         history = self.remember_message(message)
         mentioned = self.is_mentioned(message)
+        replying_to_bot = self.is_reply_to_self(message)
+        bot_addressed = mentioned or replying_to_bot or message.guild is None
+        latest_author = getattr(
+            message.author,
+            "display_name",
+            str(message.author),
+        )
         mode, activity = self.reply_policy(message)
         query = message.content.strip()
         if self.user is not None:
@@ -865,6 +890,8 @@ class MyPicClient(discord.Client):
                     mode=mode,
                     activity=activity,
                     mentioned=mentioned,
+                    latest_author=latest_author,
+                    bot_addressed=bot_addressed,
                     context={
                         "trigger": (
                             "mention" if mentioned else "automatic_message"
@@ -873,6 +900,9 @@ class MyPicClient(discord.Client):
                         "guild_id": message.guild.id if message.guild else None,
                         "channel_id": message.channel.id,
                         "author_id": message.author.id,
+                        "author_name": latest_author,
+                        "replying_to_bot": replying_to_bot,
+                        "bot_addressed": bot_addressed,
                     },
                 )
             if path is None:

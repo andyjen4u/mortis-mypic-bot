@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 mortis-bot = "mypic_bot.bot:main"
 mortis-data = "mypic_bot.cli:main"
+mortis-dashboard = "mypic_bot.dashboard:main"
 
 [tool.setuptools.packages.find]
 include = ["mypic_bot*"]

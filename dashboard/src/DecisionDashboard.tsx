@@ -1,8 +1,8 @@
-"use client";
-
 import {
+  useCallback,
   ChangeEvent,
   DragEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -129,10 +129,65 @@ export function DecisionDashboard() {
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
-  const [datasetName, setDatasetName] = useState("示範資料");
+  const [datasetName, setDatasetName] = useState("正在連線 CT108…");
   const [importError, setImportError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState("");
+  const [refreshing, setRefreshing] = useState(true);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const refreshLiveData = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/decisions?limit=300", {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`API 回傳 ${response.status}`);
+      }
+      const payload = (await response.json()) as {
+        records?: DecisionRecord[];
+        source?: string;
+      };
+      const nextRecords = payload.records ?? [];
+      if (!nextRecords.length) {
+        throw new Error("目前沒有決策紀錄");
+      }
+      setRecords(nextRecords);
+      setSelectedId((current) =>
+        nextRecords.some((record) => record.selection_id === current)
+          ? current
+          : (nextRecords[0]?.selection_id ?? ""),
+      );
+      setDatasetName(payload.source ?? "CT108 · Live");
+      setLastUpdated(
+        new Intl.DateTimeFormat("zh-TW", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).format(new Date()),
+      );
+      setImportError("");
+    } catch (error) {
+      setDatasetName("示範資料 · API 未連線");
+      setImportError(
+        error instanceof Error
+          ? `無法讀取本機決策 API：${error.message}`
+          : "無法讀取本機決策 API",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLiveData();
+    const timer = window.setInterval(() => {
+      void refreshLiveData();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [refreshLiveData]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -190,6 +245,7 @@ export function DecisionDashboard() {
       setRecords(nextRecords);
       setSelectedId(nextRecords[0]?.selection_id ?? "");
       setDatasetName(file.name);
+      setLastUpdated("手動匯入");
       setImportError("");
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "無法讀取檔案");
@@ -238,9 +294,17 @@ export function DecisionDashboard() {
         </div>
         <div className="topbar-meta">
           <span className="dataset-pill">
-            <i />
+            <i className={refreshing ? "pulse" : ""} />
             {datasetName}
           </span>
+          <button
+            className="refresh-button"
+            onClick={() => void refreshLiveData()}
+            disabled={refreshing}
+            title={lastUpdated ? `上次更新 ${lastUpdated}` : "重新整理"}
+          >
+            {refreshing ? "更新中…" : "重新整理"}
+          </button>
           <input
             ref={inputRef}
             className="visually-hidden"
@@ -461,6 +525,13 @@ export function DecisionDashboard() {
                     resultStatus === "stayed_silent" ? "保持沉默" : "未記錄字幕",
                   )}
                 </blockquote>
+                {typeof result.image_url === "string" && (
+                  <img
+                    className="selected-image"
+                    src={result.image_url}
+                    alt={text(result.text, "選中的梗圖")}
+                  />
+                )}
                 <div className="outcome-meta">
                   <span>segment {text(result.segment_id, "—")}</span>
                   <span>{text(policy.gate_reason, "未記錄門檻")}</span>
@@ -708,7 +779,9 @@ export function DecisionDashboard() {
           <footer className="trace-footer">
             <span>
               <i />
-              所有內容皆來自匯入的本機 JSONL
+              {datasetName.startsWith("CT108")
+                ? `直接讀取 CT108 · ${lastUpdated || "同步中"}`
+                : "內容來自瀏覽器本機匯入"}
             </span>
             <code>{selected.selection_id}</code>
           </footer>

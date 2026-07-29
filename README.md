@@ -229,8 +229,8 @@ mortis-data audit --limit 20 --suppressed-only
 
 ## 決策 Dashboard
 
-[`dashboard/`](dashboard/) 提供完整的瀏覽器決策檢視器，可匯入
-`decisions.jsonl`，依訊息逐筆查看：
+[`dashboard/`](dashboard/) 提供完整的本地決策檢視器。CT108 上的
+`mortis-dashboard` 服務會直接讀取 `decisions.jsonl`，依訊息逐筆查看：
 
 - 最近群聊、最新訊息及回圖模式
 - Planner 原始輸出、程式校正、反應角色與搜尋詞
@@ -239,7 +239,8 @@ mortis-data audit --limit 20 --suppressed-only
 - cross-encoder baseline、final judge 與傳送狀態
 - Planner、embedding、retrieval、reranker 等階段耗時
 
-JSONL 只在使用者的瀏覽器內解析，不會由 Dashboard 上傳或保存。
+頁面每 30 秒自動更新，也可預覽最後選中的原始圖片。資料只在 CT108 內網與
+使用者瀏覽器之間傳輸，不會上傳或保存在外部服務。
 
 ## Discord 安裝模式
 

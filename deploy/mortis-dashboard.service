@@ -1,0 +1,22 @@
+[Unit]
+Description=Mortis decision observability dashboard
+After=network-online.target mortis-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mortisbot
+Group=mortisbot
+WorkingDirectory=/opt/mortis-bot
+EnvironmentFile=/etc/mortis-bot.env
+Environment=DASHBOARD_STATIC_DIR=/opt/mortis-bot/dashboard/dist
+ExecStart=/opt/mortis-bot/.venv/bin/mortis-dashboard --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

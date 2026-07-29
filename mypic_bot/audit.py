@@ -46,8 +46,8 @@ def summarize_decision(record: dict) -> dict:
         risks.append("planner_confidence_not_grounded_in_fit")
     if len(str(selected.get("text", ""))) > 36:
         risks.append("long_caption")
-    if result.get("delivery") == "suppressed_shadow":
-        risks.append("shadow_only")
+    if result.get("delivery") == "suppressed_off":
+        risks.append("delivery_suppressed")
     return {
         "selection_id": record.get("selection_id"),
         "query": record.get("query"),
@@ -89,7 +89,7 @@ def summarize_decision(record: dict) -> dict:
 def read_decisions(
     path: Path,
     limit: int = 20,
-    shadow_only: bool = False,
+    suppressed_only: bool = False,
 ) -> list[dict]:
     if not path.exists():
         return []
@@ -98,11 +98,12 @@ def read_decisions(
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
-    if shadow_only:
+    if suppressed_only:
         records = (
             record
             for record in records
-            if record.get("context", {}).get("shadow") is True
+            if record.get("result", {}).get("delivery")
+            == "suppressed_off"
         )
     return list(records)[-max(1, limit) :]
 
@@ -110,7 +111,7 @@ def read_decisions(
 def print_audit(
     path: Path,
     limit: int = 20,
-    shadow_only: bool = False,
+    suppressed_only: bool = False,
 ) -> None:
-    for record in read_decisions(path, limit, shadow_only):
+    for record in read_decisions(path, limit, suppressed_only):
         print(json.dumps(summarize_decision(record), ensure_ascii=False))

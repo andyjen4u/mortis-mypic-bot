@@ -19,7 +19,6 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.auto_reply_activity, "medium")
         self.assertEqual(settings.context_message_limit, 5)
         self.assertTrue(settings.decision_log_enabled)
-        self.assertFalse(settings.shadow_evaluation_enabled)
         self.assertEqual(
             settings.decision_log_path,
             settings.data_dir / "decisions.jsonl",
@@ -41,7 +40,6 @@ class SettingsTests(unittest.TestCase):
             "AUTO_REPLY_ACTIVITY": "high",
             "CONTEXT_MESSAGE_LIMIT": "4",
             "DECISION_LOG_ENABLED": "false",
-            "SHADOW_EVALUATION_ENABLED": "true",
             "DECISION_LOG_PATH": "/tmp/mortis-decisions.jsonl",
             "RERANKER_BASE_URL": "http://localhost:8083/v1/",
             "RERANKER_MODEL": "qwen3-reranker",
@@ -61,7 +59,6 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.auto_reply_activity, "high")
         self.assertEqual(settings.context_message_limit, 4)
         self.assertFalse(settings.decision_log_enabled)
-        self.assertTrue(settings.shadow_evaluation_enabled)
         self.assertEqual(
             settings.decision_log_path,
             Path("/tmp/mortis-decisions.jsonl"),

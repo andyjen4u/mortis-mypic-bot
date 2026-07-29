@@ -92,17 +92,10 @@ def is_reply_feature_feedback(text: str, conversation: str = "") -> bool:
 def resolve_evaluation_mode(
     configured_mode: str,
     mentioned: bool,
-    shadow_enabled: bool,
-) -> tuple[str | None, bool]:
+) -> tuple[str, bool]:
     mode = normalize_mode(configured_mode)
-    shadow = (
-        mode == "off"
-        and not mentioned
-        and shadow_enabled
-    )
-    if mode == "off" and not mentioned and not shadow:
-        return None, False
-    return ("auto" if shadow else mode), shadow
+    suppress_delivery = mode == "off" and not mentioned
+    return ("auto" if suppress_delivery else mode), suppress_delivery
 
 
 def should_post_choice(

@@ -32,32 +32,21 @@ class ReplyPolicyTests(unittest.TestCase):
             is_reply_feature_feedback("這張顯卡比我想像的大")
         )
 
-    def test_off_mode_can_run_as_suppressed_shadow_auto(self):
-        mode, shadow = resolve_evaluation_mode(
+    def test_off_mode_uses_auto_evaluation_and_suppresses_delivery(self):
+        mode, delivery_suppressed = resolve_evaluation_mode(
             "off",
             mentioned=False,
-            shadow_enabled=True,
         )
         self.assertEqual(mode, "auto")
-        self.assertTrue(shadow)
-
-    def test_off_without_shadow_does_not_evaluate(self):
-        mode, shadow = resolve_evaluation_mode(
-            "off",
-            mentioned=False,
-            shadow_enabled=False,
-        )
-        self.assertIsNone(mode)
-        self.assertFalse(shadow)
+        self.assertTrue(delivery_suppressed)
 
     def test_mention_still_uses_configured_off_override(self):
-        mode, shadow = resolve_evaluation_mode(
+        mode, delivery_suppressed = resolve_evaluation_mode(
             "off",
             mentioned=True,
-            shadow_enabled=True,
         )
         self.assertEqual(mode, "off")
-        self.assertFalse(shadow)
+        self.assertFalse(delivery_suppressed)
 
     def test_mentions_always_override_off_and_silence(self):
         post, reason = should_post_choice(

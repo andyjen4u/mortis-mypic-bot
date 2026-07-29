@@ -52,7 +52,6 @@ class Settings:
     context_message_limit: int
     decision_log_enabled: bool
     decision_log_path_override: Optional[Path]
-    shadow_evaluation_enabled: bool
     data_dir: Path
     llm_base_url: str
     llm_api_key: str
@@ -107,10 +106,6 @@ class Settings:
                 Path(os.environ["DECISION_LOG_PATH"])
                 if os.getenv("DECISION_LOG_PATH", "").strip()
                 else None
-            ),
-            shadow_evaluation_enabled=_bool(
-                "SHADOW_EVALUATION_ENABLED",
-                False,
             ),
             data_dir=Path(os.getenv("DATA_DIR", "/var/lib/mortis-bot")),
             llm_base_url=os.getenv("LLM_BASE_URL", "").rstrip("/"),

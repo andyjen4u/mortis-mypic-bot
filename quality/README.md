@@ -1,7 +1,9 @@
-# Mortis shadow quality reviews
+# Mortis quality reviews
 
-`shadow_reviews.jsonl` 是人工／Codex 對 shadow 選圖的增量評估紀錄。
+`reviews.jsonl` 是人工／Codex 對選圖結果的增量評估紀錄。
 每個 `selection_id` 只評估一次。
+舊版曾強制執行 final judge 的樣本以
+`pipeline: legacy_forced_final_judge` 標示，不和目前正式流程直接比較。
 
 主要標籤：
 

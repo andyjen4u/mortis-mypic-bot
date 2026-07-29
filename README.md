@@ -125,9 +125,8 @@ GGUF SHA-256 為
 planner endpoint drop-in 是
 [`deploy/mortis-bot-planner.conf`](deploy/mortis-bot-planner.conf)，其值放在
 [`deploy/mortis-bot-planner.env`](deploy/mortis-bot-planner.env)，並在主
-環境檔之後載入。`FINAL_JUDGE_ENABLED=false` 會讓正常回圖直接採用
-reranker 與 grounding filter 的結果；設為 `true` 才會對正常回圖再呼叫
-一次 Gemma。影子評估不受此開關影響，固定執行最終語境裁判。
+環境檔之後載入。`FINAL_JUDGE_ENABLED=false` 會直接採用 reranker 與
+grounding filter 的結果；設為 `true` 才會對每次選圖再呼叫一次 Gemma。
 
 若 embedding 服務因安全需求只監聽 CT102 的 `127.0.0.1:8081`，可啟用
 [`deploy/nemotron-embedding-proxy.socket`](deploy/nemotron-embedding-proxy.socket)
@@ -150,8 +149,8 @@ Rocky Linux 等 systemd 環境可參考 [`deploy/`](deploy/) 內的服務範本�
 
 - `always`：每則一般文字訊息都選一張圖。
 - `auto`：模型評估插話時機及候選品質後決定是否回圖。
-- `off`：不傳送普通訊息的回圖。若另開影子評估，仍會在背景選圖並記錄，
-  但不顯示輸入狀態，也不向 Discord 傳送圖片。
+- `off`：普通訊息仍依照 `auto` 的相同流程完成判斷與記錄，但不顯示輸入
+  狀態，也不向 Discord 傳送圖片。
 - 無論模式為何，提及 Mortis 或使用 `/mypic` 都會強制選圖。
 - Bot 與 Webhook 訊息一律忽略，避免無限回覆。
 - `auto` 模式以頻道為單位套用冷卻時間；提及不受冷卻限制。
@@ -165,7 +164,6 @@ CONTEXT_MESSAGE_LIMIT=5
 AUTO_REPLY_ENABLED=true
 AUTO_REPLY_DMS=true
 AUTO_REPLY_COOLDOWN_SECONDS=10
-SHADOW_EVALUATION_ENABLED=false
 ```
 
 在 Discord 使用以下子指令查看或修改設定：
@@ -203,7 +201,8 @@ SHADOW_EVALUATION_ENABLED=false
 - 模型的 `post`／`stay_silent` 決策、簡短理由、梗圖角色與信心值
 - 純 cross-encoder 基準選擇及其字幕、grounding filter 與 Gemma 語境裁判
   採用的選擇觀點
-- `sent`、`suppressed_shadow` 等傳送狀態，用來證明影子評估沒有實際回圖
+- `discord_pending`、`suppressed_off` 等傳送狀態，用來區分正常回圖與
+  `off` 模式下只判斷、不傳送的結果
 - queue、planner、embedding、retrieval、reranker、final judge、圖片準備及總延遲
 - 最後傳送的本機圖片路徑
 
@@ -217,16 +216,16 @@ SHADOW_EVALUATION_ENABLED=false
 tail -n 1 /var/lib/mortis-bot/decisions.jsonl | python -m json.tool
 ```
 
-將最近的影子決策整理成可讀的稽核摘要：
+將最近未傳送的 `off` 模式決策整理成可讀的稽核摘要：
 
 ```bash
-mortis-data audit --limit 20 --shadow-only
+mortis-data audit --limit 20 --suppressed-only
 ```
 
-人工評分可記在 [`quality/shadow_reviews.jsonl`](quality/shadow_reviews.jsonl)，
-分類方式與迭代規則見 [`quality/README.md`](quality/README.md)。影子模式適合在
-頻道設定為 `off` 時持續累積真實群聊樣本，再以小批次找出重複的錯誤類型；
-不要針對單一句子或特定人名加入硬編碼規則。
+人工評分可記在 [`quality/reviews.jsonl`](quality/reviews.jsonl)，分類方式與
+迭代規則見 [`quality/README.md`](quality/README.md)。頻道設定為 `off` 時仍會
+持續累積真實群聊樣本，再以小批次找出重複的錯誤類型；不要針對單一句子或
+特定人名加入硬編碼規則。
 
 ## Discord 安裝模式
 

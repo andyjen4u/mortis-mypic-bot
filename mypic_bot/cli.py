@@ -149,7 +149,7 @@ def main() -> None:
     query_parser.add_argument("--cross-rerank", action="store_true")
     audit_parser = subparsers.add_parser("audit")
     audit_parser.add_argument("--limit", type=int, default=20)
-    audit_parser.add_argument("--shadow-only", action="store_true")
+    audit_parser.add_argument("--suppressed-only", action="store_true")
     subparsers.add_parser("status")
     args = parser.parse_args()
     settings = Settings.from_env()
@@ -173,7 +173,7 @@ def main() -> None:
         print_audit(
             settings.decision_log_path,
             max(1, args.limit),
-            args.shadow_only,
+            args.suppressed_only,
         )
     else:
         print_status(settings)

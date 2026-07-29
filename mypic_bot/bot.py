@@ -86,10 +86,6 @@ class MyPicClient(discord.Client):
             self.settings.decision_log_path,
         )
         logging.info(
-            "Shadow evaluation enabled=%s",
-            self.settings.shadow_evaluation_enabled,
-        )
-        logging.info(
             "Interjection planner endpoint=%s model=%s",
             self.settings.llm_base_url or "disabled",
             self.settings.llm_model or "default",
@@ -172,9 +168,11 @@ class MyPicClient(discord.Client):
         bot_addressed: bool | None = None,
     ) -> Path | None:
         selection_id = str(uuid4())
-        is_shadow = bool((context or {}).get("shadow"))
+        delivery_suppressed = bool(
+            (context or {}).get("delivery_suppressed")
+        )
         suppressed_delivery = (
-            "suppressed_shadow" if is_shadow else "not_selected"
+            "suppressed_off" if delivery_suppressed else "not_selected"
         )
         allow_silence = mode == "auto" and not mentioned
         if allow_silence and self.selection_lock.locked():
@@ -603,7 +601,6 @@ class MyPicClient(discord.Client):
             use_final_judge = (
                 self.settings.final_judge_enabled
                 or not rerank_results
-                or bool((context or {}).get("shadow"))
             )
             if use_final_judge:
                 try:
@@ -774,8 +771,8 @@ class MyPicClient(discord.Client):
                         "path": str(path),
                         "image_source": image_source,
                         "delivery": (
-                            "suppressed_shadow"
-                            if is_shadow
+                            "suppressed_off"
+                            if delivery_suppressed
                             else "discord_pending"
                         ),
                     },
@@ -876,20 +873,13 @@ class MyPicClient(discord.Client):
                 query = "有人突然叫我出來時的反應"
             else:
                 return
-        decision_mode, shadow = resolve_evaluation_mode(
+        decision_mode, delivery_suppressed = resolve_evaluation_mode(
             mode,
             mentioned,
-            self.settings.shadow_evaluation_enabled,
         )
-        if decision_mode is None:
-            return
         decision_context = {
-            "trigger": (
-                "shadow_evaluation"
-                if shadow
-                else "mention" if mentioned else "automatic_message"
-            ),
-            "shadow": shadow,
+            "trigger": "mention" if mentioned else "automatic_message",
+            "delivery_suppressed": delivery_suppressed,
             "message_id": message.id,
             "guild_id": message.guild.id if message.guild else None,
             "channel_id": message.channel.id,
@@ -920,8 +910,8 @@ class MyPicClient(discord.Client):
                     "result": {
                         "status": "stayed_silent",
                         "delivery": (
-                            "suppressed_shadow"
-                            if shadow
+                            "suppressed_off"
+                            if delivery_suppressed
                             else "not_selected"
                         ),
                     },
@@ -951,8 +941,8 @@ class MyPicClient(discord.Client):
                     "result": {
                         "status": "stayed_silent",
                         "delivery": (
-                            "suppressed_shadow"
-                            if shadow
+                            "suppressed_off"
+                            if delivery_suppressed
                             else "not_selected"
                         ),
                     },
@@ -979,8 +969,8 @@ class MyPicClient(discord.Client):
                     "result": {
                         "status": "stayed_silent",
                         "delivery": (
-                            "suppressed_shadow"
-                            if shadow
+                            "suppressed_off"
+                            if delivery_suppressed
                             else "not_selected"
                         ),
                     },
@@ -989,14 +979,14 @@ class MyPicClient(discord.Client):
             return
         logging.info(
             "Received message id=%s guild_id=%s channel_id=%s "
-            "mode=%s evaluated_mode=%s mentioned=%s shadow=%s",
+            "mode=%s evaluated_mode=%s mentioned=%s delivery_suppressed=%s",
             message.id,
             message.guild.id if message.guild else None,
             message.channel.id,
             mode,
             decision_mode,
             mentioned,
-            shadow,
+            delivery_suppressed,
         )
         try:
             selection = self.select_image(
@@ -1009,14 +999,14 @@ class MyPicClient(discord.Client):
                 bot_addressed=bot_addressed,
                 context=decision_context,
             )
-            if shadow:
+            if delivery_suppressed:
                 path = await selection
             else:
                 async with message.channel.typing():
                     path = await selection
-            if shadow:
+            if delivery_suppressed:
                 logging.info(
-                    "Shadow evaluation completed message_id=%s selected=%s",
+                    "Off-mode evaluation completed message_id=%s selected=%s",
                     message.id,
                     path,
                 )

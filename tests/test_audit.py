@@ -7,14 +7,14 @@ from mypic_bot.audit import read_decisions, summarize_decision
 
 
 class DecisionAuditTests(unittest.TestCase):
-    def test_summarizes_shadow_trace_and_flags_low_fit(self):
+    def test_summarizes_suppressed_trace_and_flags_low_fit(self):
         record = {
             "selection_id": "abc",
             "query": "Teto 的聲庫太強",
             "conversation": "Andy: 不用翻唱性能就好",
             "context": {
-                "trigger": "shadow_evaluation",
-                "shadow": True,
+                "trigger": "automatic_message",
+                "delivery_suppressed": True,
                 "configured_mode": "off",
                 "evaluated_mode": "auto",
             },
@@ -45,7 +45,7 @@ class DecisionAuditTests(unittest.TestCase):
             "result": {
                 "status": "selected",
                 "segment_id": 1,
-                "delivery": "suppressed_shadow",
+                "delivery": "suppressed_off",
             },
         }
         summary = summarize_decision(record)
@@ -54,26 +54,32 @@ class DecisionAuditTests(unittest.TestCase):
             "planner_confidence_not_grounded_in_fit",
             summary["risks"],
         )
-        self.assertIn("shadow_only", summary["risks"])
+        self.assertIn("delivery_suppressed", summary["risks"])
         self.assertEqual(summary["baseline"]["index"], 0)
 
-    def test_reads_only_shadow_records(self):
+    def test_reads_only_suppressed_records(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "decisions.jsonl"
             path.write_text(
                 "\n".join(
                     json.dumps(record)
                     for record in (
-                        {"selection_id": "live", "context": {"shadow": False}},
-                        {"selection_id": "shadow", "context": {"shadow": True}},
+                        {
+                            "selection_id": "live",
+                            "result": {"delivery": "discord_pending"},
+                        },
+                        {
+                            "selection_id": "suppressed",
+                            "result": {"delivery": "suppressed_off"},
+                        },
                     )
                 ),
                 encoding="utf-8",
             )
-            records = read_decisions(path, shadow_only=True)
+            records = read_decisions(path, suppressed_only=True)
         self.assertEqual(
             [record["selection_id"] for record in records],
-            ["shadow"],
+            ["suppressed"],
         )
 
 

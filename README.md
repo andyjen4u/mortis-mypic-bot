@@ -227,6 +227,20 @@ mortis-data audit --limit 20 --suppressed-only
 持續累積真實群聊樣本，再以小批次找出重複的錯誤類型；不要針對單一句子或
 特定人名加入硬編碼規則。
 
+## 決策 Dashboard
+
+[`dashboard/`](dashboard/) 提供完整的瀏覽器決策檢視器，可匯入
+`decisions.jsonl`，依訊息逐筆查看：
+
+- 最近群聊、最新訊息及回圖模式
+- Planner 原始輸出、程式校正、反應角色與搜尋詞
+- 語意與字詞召回查詢
+- 每張候選的 semantic、contextual 及 reaction 分數
+- cross-encoder baseline、final judge 與傳送狀態
+- Planner、embedding、retrieval、reranker 等階段耗時
+
+JSONL 只在使用者的瀏覽器內解析，不會由 Dashboard 上傳或保存。
+
 ## Discord 安裝模式
 
 Discord Developer Portal 的 Installation 設定需同時啟用：

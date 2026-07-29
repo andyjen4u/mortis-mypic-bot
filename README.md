@@ -19,7 +19,7 @@ Qwen3 cross-encoder 依反應角色做單一路重排
     ↓
 字幕去重、反應詞候選保留及人物、時態、人稱 grounding filter
     ↓
-直接採用角色對應的最高排名；reranker 故障時才由 Gemma 救援選圖
+正常模式直接採用角色對應的最高排名；影子評估模式再由 Gemma 判斷哪張適合接話
     ↓
 從本地圖片快取回傳選中的 WebP
 ```
@@ -43,8 +43,8 @@ Qwen3 cross-encoder 依反應角色做單一路重排
 - llama.cpp `thinking_budget_tokens` 與 JSON Schema 輸出
 - 動態字幕搜尋詞、混合檢索、字幕去重及反應詞候選保留
 - 人物、時態與人稱一致性過濾
-- 可選的 Gemma 最終裁判；預設只在 reranker 故障時救援
-- Planner、embedding、檢索、reranker、最終裁判與圖片準備的延遲紀錄
+- 可選的 Gemma 最終裁判；影子評估固定啟用以比較純 reranker 與語境判斷
+- Planner 原始輸出／校正結果、embedding、檢索、reranker、最終裁判與圖片準備的透明紀錄
 - Discord `/mypic` slash command
 - 同時支援 Guild Install 與 User Install
 - 可在伺服器、Bot 私訊、私人及群組頻道使用
@@ -125,8 +125,9 @@ GGUF SHA-256 為
 planner endpoint drop-in 是
 [`deploy/mortis-bot-planner.conf`](deploy/mortis-bot-planner.conf)，其值放在
 [`deploy/mortis-bot-planner.env`](deploy/mortis-bot-planner.env)，並在主
-環境檔之後載入。`FINAL_JUDGE_ENABLED=false` 會直接採用 reranker 與
-grounding filter 的結果；設為 `true` 才會對每次回圖再呼叫一次 Gemma。
+環境檔之後載入。`FINAL_JUDGE_ENABLED=false` 會讓正常回圖直接採用
+reranker 與 grounding filter 的結果；設為 `true` 才會對正常回圖再呼叫
+一次 Gemma。影子評估不受此開關影響，固定執行最終語境裁判。
 
 若 embedding 服務因安全需求只監聽 CT102 的 `127.0.0.1:8081`，可啟用
 [`deploy/nemotron-embedding-proxy.socket`](deploy/nemotron-embedding-proxy.socket)
@@ -149,7 +150,8 @@ Rocky Linux 等 systemd 環境可參考 [`deploy/`](deploy/) 內的服務範本�
 
 - `always`：每則一般文字訊息都選一張圖。
 - `auto`：模型評估插話時機及候選品質後決定是否回圖。
-- `off`：不監聽普通訊息。
+- `off`：不傳送普通訊息的回圖。若另開影子評估，仍會在背景選圖並記錄，
+  但不顯示輸入狀態，也不向 Discord 傳送圖片。
 - 無論模式為何，提及 Mortis 或使用 `/mypic` 都會強制選圖。
 - Bot 與 Webhook 訊息一律忽略，避免無限回覆。
 - `auto` 模式以頻道為單位套用冷卻時間；提及不受冷卻限制。
@@ -163,6 +165,7 @@ CONTEXT_MESSAGE_LIMIT=5
 AUTO_REPLY_ENABLED=true
 AUTO_REPLY_DMS=true
 AUTO_REPLY_COOLDOWN_SECONDS=10
+SHADOW_EVALUATION_ENABLED=false
 ```
 
 在 Discord 使用以下子指令查看或修改設定：
@@ -191,13 +194,16 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 每筆紀錄包含：
 
 - 使用者原始訊息、最近群聊及 Discord 訊息／頻道識別碼
-- planner 的插話決策、反應角色、核心事件詞與動態字幕搜尋詞
+- planner 未經校正的輸出、套用的校正規則，以及最終插話決策、反應角色、
+  核心事件詞與動態字幕搜尋詞
 - 五個語意檢索查詢、中文字詞候選及 16 張混合召回候選
 - 候選字幕、segment ID、語意相似度、檢索角度及 reranker 分數
 - planner 角色選定的單一路 reranker、反應詞保留候選及最終候選編號
 - 模式、積極度、是否被提及、插話門檻結果
 - 模型的 `post`／`stay_silent` 決策、簡短理由、梗圖角色與信心值
-- grounding filter 與可選 Gemma 最終裁判採用的選擇觀點
+- 純 cross-encoder 基準選擇及其字幕、grounding filter 與 Gemma 語境裁判
+  採用的選擇觀點
+- `sent`、`suppressed_shadow` 等傳送狀態，用來證明影子評估沒有實際回圖
 - queue、planner、embedding、retrieval、reranker、final judge、圖片準備及總延遲
 - 最後傳送的本機圖片路徑
 
@@ -210,6 +216,17 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 ```bash
 tail -n 1 /var/lib/mortis-bot/decisions.jsonl | python -m json.tool
 ```
+
+將最近的影子決策整理成可讀的稽核摘要：
+
+```bash
+mortis-data audit --limit 20 --shadow-only
+```
+
+人工評分可記在 [`quality/shadow_reviews.jsonl`](quality/shadow_reviews.jsonl)，
+分類方式與迭代規則見 [`quality/README.md`](quality/README.md)。影子模式適合在
+頻道設定為 `off` 時持續累積真實群聊樣本，再以小批次找出重複的錯誤類型；
+不要針對單一句子或特定人名加入硬編碼規則。
 
 ## Discord 安裝模式
 

@@ -29,7 +29,36 @@ _LOW_SIGNAL_MESSAGES = {
     "在么",
     "有人嗎",
     "有人在嗎",
+    "有聽過",
+    "沒聽過",
+    "好",
+    "好喔",
+    "嗯",
+    "喔",
+    "哦",
+    "ok",
+    "okay",
 }
+
+_REPLY_FEATURE_FEEDBACK = (
+    "指令發圖",
+    "指令回圖",
+    "關閉回圖",
+    "不要回圖",
+    "不要發圖",
+    "每一句話都要一張圖",
+    "每句話都要一張圖",
+    "太常回圖",
+    "一直回圖",
+    "很占版面",
+    "蠻占版面",
+    "很佔版面",
+    "蠻佔版面",
+    "回圖功能",
+    "發圖功能",
+    "模型的判斷要多調",
+    "判斷要多調",
+)
 
 
 def normalize_mode(value: str) -> str:
@@ -53,6 +82,27 @@ def activity_threshold(activity: str) -> float:
 def is_low_signal_message(text: str) -> bool:
     normalized = re.sub(r"[\s!?！？。,.，～~]+", "", text).lower()
     return normalized in _LOW_SIGNAL_MESSAGES
+
+
+def is_reply_feature_feedback(text: str, conversation: str = "") -> bool:
+    combined = f"{conversation}\n{text}".lower()
+    return any(marker in combined for marker in _REPLY_FEATURE_FEEDBACK)
+
+
+def resolve_evaluation_mode(
+    configured_mode: str,
+    mentioned: bool,
+    shadow_enabled: bool,
+) -> tuple[str | None, bool]:
+    mode = normalize_mode(configured_mode)
+    shadow = (
+        mode == "off"
+        and not mentioned
+        and shadow_enabled
+    )
+    if mode == "off" and not mentioned and not shadow:
+        return None, False
+    return ("auto" if shadow else mode), shadow
 
 
 def should_post_choice(

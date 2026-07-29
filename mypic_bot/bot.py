@@ -25,7 +25,13 @@ from .embeddings import SemanticIndex, meme_retrieval_queries, request_embedding
 from .images import download_one
 from .llm import CandidateChoice, choose_candidate
 from .planner import InterjectionPlan, expanded_search_terms, plan_interjection
-from .policy import is_low_signal_message, policy_summary, should_post_choice
+from .policy import (
+    is_low_signal_message,
+    is_reply_feature_feedback,
+    policy_summary,
+    resolve_evaluation_mode,
+    should_post_choice,
+)
 from .reranker import (
     candidate_text_key,
     mentions_speaker_alias,
@@ -80,6 +86,10 @@ class MyPicClient(discord.Client):
             self.settings.decision_log_path,
         )
         logging.info(
+            "Shadow evaluation enabled=%s",
+            self.settings.shadow_evaluation_enabled,
+        )
+        logging.info(
             "Interjection planner endpoint=%s model=%s",
             self.settings.llm_base_url or "disabled",
             self.settings.llm_model or "default",
@@ -121,6 +131,35 @@ class MyPicClient(discord.Client):
                     aliases.append(str(value))
         return tuple(dict.fromkeys(aliases))
 
+    def planner_record(
+        self,
+        plan: InterjectionPlan,
+        error: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "model": self.settings.llm_model,
+            "raw": {
+                "reaction_goal": plan.raw_reaction_goal or plan.reaction_goal,
+                "search_terms": list(
+                    plan.raw_search_terms or plan.search_terms
+                ),
+                "meme_role": plan.raw_meme_role or plan.meme_role,
+                "speaker_perspective": (
+                    plan.raw_speaker_perspective
+                    or plan.speaker_perspective
+                ),
+            },
+            "adjustments": list(plan.adjustments),
+            "action": plan.action,
+            "reaction_goal": plan.reaction_goal,
+            "search_terms": list(plan.search_terms),
+            "meme_role": plan.meme_role,
+            "speaker_perspective": plan.speaker_perspective,
+            "reason": plan.reason,
+            "confidence": plan.confidence,
+            "error": error,
+        }
+
     async def select_image(
         self,
         query: str,
@@ -133,6 +172,10 @@ class MyPicClient(discord.Client):
         bot_addressed: bool | None = None,
     ) -> Path | None:
         selection_id = str(uuid4())
+        is_shadow = bool((context or {}).get("shadow"))
+        suppressed_delivery = (
+            "suppressed_shadow" if is_shadow else "not_selected"
+        )
         allow_silence = mode == "auto" and not mentioned
         if allow_silence and self.selection_lock.locked():
             await self.write_decision(
@@ -148,7 +191,10 @@ class MyPicClient(discord.Client):
                         "gate_reason": "busy_skip",
                     },
                     "timings_ms": {"queue": 0.0, "total": 0.0},
-                    "result": {"status": "stayed_silent"},
+                    "result": {
+                        "status": "stayed_silent",
+                        "delivery": suppressed_delivery,
+                    },
                 }
             )
             logging.info(
@@ -216,20 +262,13 @@ class MyPicClient(discord.Client):
                             "mentioned": mentioned,
                             "gate_reason": plan_gate_reason,
                         },
-                        "planner": {
-                            "model": self.settings.llm_model,
-                            "action": plan.action,
-                            "reaction_goal": plan.reaction_goal,
-                            "search_terms": list(plan.search_terms),
-                            "meme_role": plan.meme_role,
-                            "speaker_perspective": plan.speaker_perspective,
-                            "reason": plan.reason,
-                            "confidence": plan.confidence,
-                            "error": planner_error,
-                        },
+                        "planner": self.planner_record(plan, planner_error),
                         "timings_ms": timing_snapshot(),
                         "candidates": [],
-                        "result": {"status": "stayed_silent"},
+                        "result": {
+                            "status": "stayed_silent",
+                            "delivery": suppressed_delivery,
+                        },
                     }
                 )
                 return None
@@ -395,17 +434,7 @@ class MyPicClient(discord.Client):
                         "query": query,
                         "context": context or {},
                         "conversation": conversation,
-                        "planner": {
-                            "model": self.settings.llm_model,
-                            "action": plan.action,
-                            "reaction_goal": plan.reaction_goal,
-                            "search_terms": list(plan.search_terms),
-                            "meme_role": plan.meme_role,
-                            "speaker_perspective": plan.speaker_perspective,
-                            "reason": plan.reason,
-                            "confidence": plan.confidence,
-                            "error": planner_error,
-                        },
+                        "planner": self.planner_record(plan, planner_error),
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
@@ -414,7 +443,10 @@ class MyPicClient(discord.Client):
                         },
                         "timings_ms": timing_snapshot(),
                         "candidates": [],
-                        "result": {"status": "no_candidates"},
+                        "result": {
+                            "status": "no_candidates",
+                            "delivery": suppressed_delivery,
+                        },
                     }
                 )
                 return None
@@ -569,7 +601,9 @@ class MyPicClient(discord.Client):
                 fallback_perspective = "retrieval_fallback"
             final_judge_started = time.perf_counter()
             use_final_judge = (
-                self.settings.final_judge_enabled or not rerank_results
+                self.settings.final_judge_enabled
+                or not rerank_results
+                or bool((context or {}).get("shadow"))
             )
             if use_final_judge:
                 try:
@@ -619,17 +653,7 @@ class MyPicClient(discord.Client):
                             "mentioned": mentioned,
                             "gate_reason": gate_reason,
                         },
-                        "planner": {
-                            "model": self.settings.llm_model,
-                            "action": plan.action,
-                            "reaction_goal": plan.reaction_goal,
-                            "search_terms": list(plan.search_terms),
-                            "meme_role": plan.meme_role,
-                            "speaker_perspective": plan.speaker_perspective,
-                            "reason": plan.reason,
-                            "confidence": plan.confidence,
-                            "error": planner_error,
-                        },
+                        "planner": self.planner_record(plan, planner_error),
                         "retrieval": {
                             "mode": retrieval_mode,
                             "queries": retrieval_queries,
@@ -643,6 +667,11 @@ class MyPicClient(discord.Client):
                             "model": self.settings.reranker_model,
                             "strategy": "planner_role_single_perspective",
                             "selected_count": len(candidates),
+                            "baseline": {
+                                "index": fallback_choice.index,
+                                "text": candidates[fallback_choice.index]["text"],
+                                "perspective": fallback_perspective,
+                            },
                             "error": cross_encoder_error,
                         },
                         "llm_reranker": {
@@ -656,7 +685,10 @@ class MyPicClient(discord.Client):
                             "error": selector_error,
                         },
                         "timings_ms": timing_snapshot(),
-                        "result": {"status": "stayed_silent"},
+                        "result": {
+                            "status": "stayed_silent",
+                            "delivery": suppressed_delivery,
+                        },
                     }
                 )
                 logging.info(
@@ -703,17 +735,7 @@ class MyPicClient(discord.Client):
                         "mentioned": mentioned,
                         "gate_reason": gate_reason,
                     },
-                    "planner": {
-                        "model": self.settings.llm_model,
-                        "action": plan.action,
-                        "reaction_goal": plan.reaction_goal,
-                        "search_terms": list(plan.search_terms),
-                        "meme_role": plan.meme_role,
-                        "speaker_perspective": plan.speaker_perspective,
-                        "reason": plan.reason,
-                        "confidence": plan.confidence,
-                        "error": planner_error,
-                    },
+                    "planner": self.planner_record(plan, planner_error),
                     "retrieval": {
                         "mode": retrieval_mode,
                         "queries": retrieval_queries,
@@ -727,6 +749,11 @@ class MyPicClient(discord.Client):
                         "model": self.settings.reranker_model,
                         "strategy": "planner_role_single_perspective",
                         "selected_count": len(candidates),
+                        "baseline": {
+                            "index": fallback_choice.index,
+                            "text": candidates[fallback_choice.index]["text"],
+                            "perspective": fallback_perspective,
+                        },
                         "error": cross_encoder_error,
                     },
                     "llm_reranker": {
@@ -743,8 +770,14 @@ class MyPicClient(discord.Client):
                     "result": {
                         "status": "selected",
                         "segment_id": selected["segment_id"],
+                        "text": selected["text"],
                         "path": str(path),
                         "image_source": image_source,
+                        "delivery": (
+                            "suppressed_shadow"
+                            if is_shadow
+                            else "discord_pending"
+                        ),
                     },
                 }
             )
@@ -843,68 +876,151 @@ class MyPicClient(discord.Client):
                 query = "有人突然叫我出來時的反應"
             else:
                 return
-        if not mentioned and mode == "off":
+        decision_mode, shadow = resolve_evaluation_mode(
+            mode,
+            mentioned,
+            self.settings.shadow_evaluation_enabled,
+        )
+        if decision_mode is None:
             return
+        decision_context = {
+            "trigger": (
+                "shadow_evaluation"
+                if shadow
+                else "mention" if mentioned else "automatic_message"
+            ),
+            "shadow": shadow,
+            "message_id": message.id,
+            "guild_id": message.guild.id if message.guild else None,
+            "channel_id": message.channel.id,
+            "author_id": message.author.id,
+            "author_name": latest_author,
+            "replying_to_bot": replying_to_bot,
+            "bot_addressed": bot_addressed,
+            "configured_mode": mode,
+            "evaluated_mode": decision_mode,
+        }
         if (
             not mentioned
-            and mode == "auto"
+            and decision_mode == "auto"
             and is_low_signal_message(query)
         ):
             await self.write_decision(
                 {
                     "selection_id": str(uuid4()),
                     "query": query,
-                    "context": {
-                        "trigger": "automatic_message",
-                        "message_id": message.id,
-                        "guild_id": message.guild.id if message.guild else None,
-                        "channel_id": message.channel.id,
-                        "author_id": message.author.id,
-                    },
+                    "context": decision_context,
                     "conversation": self.format_conversation(history),
                     "policy": {
-                        "mode": mode,
+                        "mode": decision_mode,
                         "activity": activity,
                         "mentioned": False,
                         "gate_reason": "low_signal_message",
                     },
-                    "result": {"status": "stayed_silent"},
+                    "result": {
+                        "status": "stayed_silent",
+                        "delivery": (
+                            "suppressed_shadow"
+                            if shadow
+                            else "not_selected"
+                        ),
+                    },
                 }
             )
             return
-        if not mentioned and mode == "auto" and not self.take_reply_cooldown(message):
+        if (
+            not mentioned
+            and decision_mode == "auto"
+            and is_reply_feature_feedback(
+                query,
+                self.format_conversation(history),
+            )
+        ):
+            await self.write_decision(
+                {
+                    "selection_id": str(uuid4()),
+                    "query": query,
+                    "context": decision_context,
+                    "conversation": self.format_conversation(history),
+                    "policy": {
+                        "mode": decision_mode,
+                        "activity": activity,
+                        "mentioned": False,
+                        "gate_reason": "reply_feature_feedback",
+                    },
+                    "result": {
+                        "status": "stayed_silent",
+                        "delivery": (
+                            "suppressed_shadow"
+                            if shadow
+                            else "not_selected"
+                        ),
+                    },
+                }
+            )
+            return
+        if (
+            not mentioned
+            and decision_mode == "auto"
+            and not self.take_reply_cooldown(message)
+        ):
+            await self.write_decision(
+                {
+                    "selection_id": str(uuid4()),
+                    "query": query,
+                    "context": decision_context,
+                    "conversation": self.format_conversation(history),
+                    "policy": {
+                        "mode": decision_mode,
+                        "activity": activity,
+                        "mentioned": False,
+                        "gate_reason": "cooldown",
+                    },
+                    "result": {
+                        "status": "stayed_silent",
+                        "delivery": (
+                            "suppressed_shadow"
+                            if shadow
+                            else "not_selected"
+                        ),
+                    },
+                }
+            )
             return
         logging.info(
-            "Received message id=%s guild_id=%s channel_id=%s mode=%s mentioned=%s",
+            "Received message id=%s guild_id=%s channel_id=%s "
+            "mode=%s evaluated_mode=%s mentioned=%s shadow=%s",
             message.id,
             message.guild.id if message.guild else None,
             message.channel.id,
             mode,
+            decision_mode,
             mentioned,
+            shadow,
         )
         try:
-            async with message.channel.typing():
-                path = await self.select_image(
-                    query,
-                    conversation=self.format_conversation(history),
-                    mode=mode,
-                    activity=activity,
-                    mentioned=mentioned,
-                    latest_author=latest_author,
-                    bot_addressed=bot_addressed,
-                    context={
-                        "trigger": (
-                            "mention" if mentioned else "automatic_message"
-                        ),
-                        "message_id": message.id,
-                        "guild_id": message.guild.id if message.guild else None,
-                        "channel_id": message.channel.id,
-                        "author_id": message.author.id,
-                        "author_name": latest_author,
-                        "replying_to_bot": replying_to_bot,
-                        "bot_addressed": bot_addressed,
-                    },
+            selection = self.select_image(
+                query,
+                conversation=self.format_conversation(history),
+                mode=decision_mode,
+                activity=activity,
+                mentioned=mentioned,
+                latest_author=latest_author,
+                bot_addressed=bot_addressed,
+                context=decision_context,
+            )
+            if shadow:
+                path = await selection
+            else:
+                async with message.channel.typing():
+                    path = await selection
+            if shadow:
+                logging.info(
+                    "Shadow evaluation completed message_id=%s selected=%s",
+                    message.id,
+                    path,
                 )
+                return
             if path is None:
                 return
             await message.reply(

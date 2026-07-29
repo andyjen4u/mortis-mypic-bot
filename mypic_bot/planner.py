@@ -16,6 +16,11 @@ class InterjectionPlan:
     speaker_perspective: str
     reason: str
     confidence: float
+    raw_reaction_goal: str = ""
+    raw_search_terms: tuple[str, ...] = ()
+    raw_meme_role: str = ""
+    raw_speaker_perspective: str = ""
+    adjustments: tuple[str, ...] = ()
 
 
 SELF_ACCOUNTABILITY_CUES = (
@@ -90,19 +95,26 @@ def parse_interjection_plan(content: str) -> InterjectionPlan:
             if term
         )
     )
+    reaction_goal = str(result.get("reaction_goal", "")).strip()[:60]
+    meme_role = str(result.get("meme_role", "other")).strip() or "other"
+    speaker_perspective = (
+        str(result.get("speaker_perspective", "observer")).strip().lower()
+        if str(result.get("speaker_perspective", "observer")).strip().lower()
+        in {"observer", "self"}
+        else "observer"
+    )
     return InterjectionPlan(
         action=action,
-        reaction_goal=str(result.get("reaction_goal", "")).strip()[:60],
+        reaction_goal=reaction_goal,
         search_terms=search_terms,
-        meme_role=str(result.get("meme_role", "other")).strip() or "other",
-        speaker_perspective=(
-            str(result.get("speaker_perspective", "observer")).strip().lower()
-            if str(result.get("speaker_perspective", "observer")).strip().lower()
-            in {"observer", "self"}
-            else "observer"
-        ),
+        meme_role=meme_role,
+        speaker_perspective=speaker_perspective,
         reason=str(result.get("reason", "")).strip(),
         confidence=min(1.0, max(0.0, float(result.get("confidence", 0.0)))),
+        raw_reaction_goal=reaction_goal,
+        raw_search_terms=search_terms,
+        raw_meme_role=meme_role,
+        raw_speaker_perspective=speaker_perspective,
     )
 
 
@@ -113,16 +125,22 @@ def enforce_plan_consistency(
     bot_aliases: tuple[str, ...] = (),
     bot_addressed: bool | None = None,
 ) -> InterjectionPlan:
+    adjustments = list(plan.adjustments)
     if (
         plan.speaker_perspective == "self"
         and bot_addressed is False
         and not _text_refers_to_bot(query, conversation, bot_aliases)
     ):
-        plan = replace(plan, speaker_perspective="observer")
+        plan = replace(
+            plan,
+            speaker_perspective="observer",
+        )
+        adjustments.append("forced_observer_from_platform_context")
     if plan.speaker_perspective != "self":
-        return plan
+        return replace(plan, adjustments=tuple(adjustments))
     if not any(cue in query for cue in SELF_ACCOUNTABILITY_CUES):
-        return plan
+        return replace(plan, adjustments=tuple(adjustments))
+    adjustments.append("self_accountability_terms")
     return replace(
         plan,
         search_terms=SELF_ACCOUNTABILITY_TERMS,
@@ -131,6 +149,7 @@ def enforce_plan_consistency(
             if plan.meme_role in {"awkwardness", "teasing"}
             else "awkwardness"
         ),
+        adjustments=tuple(adjustments),
     )
 
 
@@ -193,6 +212,10 @@ def build_interjection_prompt(
         "自行腦補疲累、壓力或插話價值。"
         "（2）住院、急診、死亡、受傷或家人安危等真實個人危機，此時"
         "不要用梗圖插話。"
+        "（3）群友正在抱怨回圖太頻繁、占版面、判斷很差，或建議改成"
+        "指令觸發、降低頻率與關閉功能；此時再丟圖只會加重問題。"
+        "（4）只是兩位群友間的普通問答、簡短事實確認、一般推薦，或只有"
+        "網址而沒有可反應的文字內容；第三位朋友不必每次都加入。"
         "只有訊息明確包含成就或興奮、可戲謔的失敗或技術事故、遲到與"
         "前後矛盾、尷尬、驚喜、荒謬反差或強烈情緒時才選 post。"
         if allow_silence

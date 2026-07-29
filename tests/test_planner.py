@@ -28,6 +28,9 @@ class InterjectionPlanTests(unittest.TestCase):
         self.assertIn("滿分", plan.reaction_goal)
         self.assertEqual(plan.search_terms, ("恭喜", "厲害"))
         self.assertEqual(plan.confidence, 0.88)
+        self.assertEqual(plan.raw_search_terms, ("恭喜", "厲害"))
+        self.assertEqual(plan.raw_meme_role, "celebration")
+        self.assertEqual(plan.adjustments, ())
 
     def test_invalid_action_safely_stays_silent(self):
         plan = parse_interjection_plan(
@@ -153,6 +156,8 @@ class InterjectionPlanTests(unittest.TestCase):
             ("抱歉", "不是故意", "被發現了", "我錯了"),
         )
         self.assertEqual(repaired.meme_role, "awkwardness")
+        self.assertIn("self_accountability_terms", repaired.adjustments)
+        self.assertEqual(repaired.raw_search_terms, ("沒看到", "沒在理你"))
 
     def test_self_status_question_keeps_direct_answer_terms(self):
         plan = parse_interjection_plan(
@@ -194,6 +199,10 @@ class InterjectionPlanTests(unittest.TestCase):
             False,
         )
         self.assertEqual(repaired.speaker_perspective, "observer")
+        self.assertIn(
+            "forced_observer_from_platform_context",
+            repaired.adjustments,
+        )
         self.assertEqual(
             repaired.search_terms,
             ("又買一張", "被發現了", "顯卡"),

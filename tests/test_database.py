@@ -11,10 +11,12 @@ except ImportError:
 
 from mypic_bot.database import (
     connect,
+    get_message_listening,
     get_reply_policy,
     import_metadata,
     search,
     search_by_terms,
+    set_message_listening,
     set_reply_policy,
 )
 from mypic_bot.database import store_embeddings
@@ -24,6 +26,22 @@ if np is not None:
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_message_listening_defaults_on_and_persists_per_scope(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "test.sqlite3"
+            connection = connect(path)
+            self.assertTrue(get_message_listening(connection, "channel", 123))
+            set_message_listening(connection, "channel", 123, False)
+            self.assertFalse(get_message_listening(connection, "channel", 123))
+            self.assertTrue(get_message_listening(connection, "channel", 456))
+            connection.close()
+
+            connection = connect(path)
+            self.assertFalse(get_message_listening(connection, "channel", 123))
+            set_message_listening(connection, "channel", 123, True)
+            self.assertTrue(get_message_listening(connection, "channel", 123))
+            connection.close()
+
     def test_reply_policy_is_persistent_per_scope(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "test.sqlite3"

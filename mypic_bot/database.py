@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS reply_policies (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (scope_type, scope_id)
 );
+CREATE TABLE IF NOT EXISTS message_listening (
+    scope_type TEXT NOT NULL,
+    scope_id INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope_type, scope_id)
+);
 """
 
 LOW_INFORMATION_SEARCH_TERMS = {
@@ -297,4 +304,39 @@ def set_reply_policy(
                 updated_at=CURRENT_TIMESTAMP
             """,
             (scope_type, scope_id, mode, activity),
+        )
+
+
+def get_message_listening(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT enabled
+        FROM message_listening
+        WHERE scope_type=? AND scope_id=?
+        """,
+        (scope_type, scope_id),
+    ).fetchone()
+    return True if row is None else bool(row["enabled"])
+
+
+def set_message_listening(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+    enabled: bool,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO message_listening (scope_type, scope_id, enabled)
+            VALUES (?, ?, ?)
+            ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+                enabled=excluded.enabled,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (scope_type, scope_id, int(enabled)),
         )

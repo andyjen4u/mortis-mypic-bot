@@ -170,6 +170,7 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 ```text
 /mypic-settings status
+/mypic-settings listening state:<開啟監聽|停止監聽>
 /mypic-settings always
 /mypic-settings auto activity:<low|medium|high>
 /mypic-settings off
@@ -177,6 +178,8 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 只有 `auto` 模式需要選擇積極度。
 伺服器內按頻道保存，修改需要「管理訊息」權限；私訊則按使用者保存。
+`listening` 是獨立於回圖模式的真正監聽開關。停止後，該頻道的新訊息不會
+進入對話記憶、模型推論或決策紀錄；手動 `/mypic` 仍可使用。
 
 自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用
 **Message Content Intent**。

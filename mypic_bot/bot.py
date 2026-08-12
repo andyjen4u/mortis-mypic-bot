@@ -15,9 +15,11 @@ import httpx
 from .config import Settings
 from .database import (
     connect,
+    get_message_listening,
     get_reply_policy,
     search,
     search_by_terms,
+    set_message_listening,
     set_reply_policy,
 )
 from .decision_log import append_decision
@@ -803,6 +805,10 @@ class MyPicClient(discord.Client):
             mode = "off"
         return mode, self.settings.auto_reply_activity
 
+    def is_message_listening(self, message: discord.Message) -> bool:
+        scope_type, scope_id = self.policy_scope(message)
+        return get_message_listening(self.connection, scope_type, scope_id)
+
     def is_mentioned(self, message: discord.Message) -> bool:
         return self.user is not None and self.user in message.mentions
 
@@ -852,6 +858,13 @@ class MyPicClient(discord.Client):
         if message.author.bot or message.webhook_id is not None:
             return
         if not message.content or not message.content.strip():
+            return
+        if not self.is_message_listening(message):
+            logging.debug(
+                "Ignored message id=%s channel_id=%s because listening is disabled",
+                message.id,
+                message.channel.id,
+            )
             return
         history = self.remember_message(message)
         mentioned = self.is_mentioned(message)
@@ -1098,6 +1111,9 @@ def build_client(settings: Settings) -> MyPicClient:
             return stored["mode"], stored["activity"]
         return client.settings.auto_reply_mode, client.settings.auto_reply_activity
 
+    def current_listening(scope_type: str, scope_id: int) -> bool:
+        return get_message_listening(client.connection, scope_type, scope_id)
+
     async def save_policy(
         interaction: discord.Interaction,
         mode: str,
@@ -1128,8 +1144,54 @@ def build_client(settings: Settings) -> MyPicClient:
             return
         scope_type, scope_id, scope_label = scope
         mode, activity = current_policy(scope_type, scope_id)
+        listening = current_listening(scope_type, scope_id)
         await interaction.response.send_message(
-            policy_summary(scope_label, mode, activity),
+            (
+                f"{scope_label}監聽：{'開啟' if listening else '停止'}。\n"
+                f"{policy_summary(scope_label, mode, activity)}"
+            ),
+            ephemeral=True,
+        )
+
+    @settings_group.command(
+        name="listening",
+        description="開啟或停止讀取這個頻道的一般訊息",
+    )
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="開啟監聽", value="enabled"),
+            app_commands.Choice(name="停止監聽", value="disabled"),
+        ],
+    )
+    @app_commands.describe(state="是否讀取這個頻道的新訊息")
+    async def mypic_settings_listening(
+        interaction: discord.Interaction,
+        state: app_commands.Choice[str],
+    ):
+        scope = await settings_scope(interaction, require_permission=True)
+        if scope is None:
+            return
+        scope_type, scope_id, scope_label = scope
+        enabled = state.value == "enabled"
+        set_message_listening(
+            client.connection,
+            scope_type,
+            scope_id,
+            enabled,
+        )
+        if not enabled and interaction.channel_id is not None:
+            guild_id = interaction.guild_id or 0
+            client.message_history.pop((guild_id, interaction.channel_id), None)
+            client.reply_cooldowns.pop((guild_id, interaction.channel_id), None)
+        if enabled:
+            detail = "已開啟監聽，之後會依目前的回圖模式處理新訊息。"
+        else:
+            detail = (
+                "已停止監聽；之後不會保存一般對話、呼叫模型或寫入決策紀錄。"
+                "手動 `/mypic` 仍可使用。"
+            )
+        await interaction.response.send_message(
+            f"{scope_label}：{detail}",
             ephemeral=True,
         )
 

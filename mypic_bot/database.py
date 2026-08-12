@@ -36,7 +36,34 @@ CREATE TABLE IF NOT EXISTS reply_policies (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (scope_type, scope_id)
 );
+CREATE TABLE IF NOT EXISTS message_listening (
+    scope_type TEXT NOT NULL,
+    scope_id INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope_type, scope_id)
+);
 """
+
+LOW_INFORMATION_SEARCH_TERMS = {
+    "事情",
+    "反應",
+    "感覺",
+    "心情",
+    "真的",
+    "可以",
+    "不可以",
+    "沒辦法",
+    "這樣",
+    "那樣",
+}
+
+HIGH_INFORMATION_SINGLE_CHARACTER_SEARCH_TERMS = {
+    "哭",
+    "慘",
+    "撐",
+    "累",
+}
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -111,6 +138,52 @@ def search(connection: sqlite3.Connection, query: str, limit: int = 12):
         LIMIT ?
         """,
         (f"%{query}%", limit),
+    ).fetchall()
+
+
+def search_by_terms(
+    connection: sqlite3.Connection,
+    terms,
+    limit: int = 12,
+):
+    normalized_terms = tuple(
+        dict.fromkeys(
+            term.strip()
+            for term in terms
+            if (
+                isinstance(term, str)
+                and term.strip()
+                and term.strip() not in LOW_INFORMATION_SEARCH_TERMS
+                and (
+                    len(term.strip()) > 1
+                    or term.strip()
+                    in HIGH_INFORMATION_SINGLE_CHARACTER_SEARCH_TERMS
+                )
+            )
+        )
+    )[:8]
+    if not normalized_terms:
+        return []
+    match_expressions = [
+        "CASE WHEN e.text LIKE ? THEN 1 ELSE 0 END"
+        for _term in normalized_terms
+    ]
+    where_expressions = ["e.text LIKE ?" for _term in normalized_terms]
+    patterns = [f"%{term}%" for term in normalized_terms]
+    return connection.execute(
+        f"""
+        SELECT e.*, ({" + ".join(match_expressions)}) AS term_matches
+        FROM entries AS e
+        WHERE ({" OR ".join(where_expressions)})
+          AND e.segment_id = (
+              SELECT MAX(duplicate.segment_id)
+              FROM entries AS duplicate
+              WHERE duplicate.text = e.text
+          )
+        ORDER BY term_matches DESC, length(e.text) ASC, e.segment_id DESC
+        LIMIT ?
+        """,
+        (*patterns, *patterns, limit),
     ).fetchall()
 
 
@@ -231,4 +304,39 @@ def set_reply_policy(
                 updated_at=CURRENT_TIMESTAMP
             """,
             (scope_type, scope_id, mode, activity),
+        )
+
+
+def get_message_listening(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT enabled
+        FROM message_listening
+        WHERE scope_type=? AND scope_id=?
+        """,
+        (scope_type, scope_id),
+    ).fetchone()
+    return True if row is None else bool(row["enabled"])
+
+
+def set_message_listening(
+    connection: sqlite3.Connection,
+    scope_type: str,
+    scope_id: int,
+    enabled: bool,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO message_listening (scope_type, scope_id, enabled)
+            VALUES (?, ?, ?)
+            ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+                enabled=excluded.enabled,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (scope_type, scope_id, int(enabled)),
         )

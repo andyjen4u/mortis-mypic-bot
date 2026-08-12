@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from typing import Optional
 
+from .audit import print_audit
 from .config import Settings
 from .database import clear_embeddings, connect, import_metadata, pending_images
 from .database import embedding_counts
@@ -146,6 +147,9 @@ def main() -> None:
     query_parser.add_argument("--limit", type=int, default=10)
     query_parser.add_argument("--rerank", action="store_true")
     query_parser.add_argument("--cross-rerank", action="store_true")
+    audit_parser = subparsers.add_parser("audit")
+    audit_parser.add_argument("--limit", type=int, default=20)
+    audit_parser.add_argument("--suppressed-only", action="store_true")
     subparsers.add_parser("status")
     args = parser.parse_args()
     settings = Settings.from_env()
@@ -164,6 +168,12 @@ def main() -> None:
                 args.rerank,
                 args.cross_rerank,
             )
+        )
+    elif args.command == "audit":
+        print_audit(
+            settings.decision_log_path,
+            max(1, args.limit),
+            args.suppressed_only,
         )
     else:
         print_status(settings)

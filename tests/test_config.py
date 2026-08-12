@@ -24,8 +24,10 @@ class SettingsTests(unittest.TestCase):
             settings.data_dir / "decisions.jsonl",
         )
         self.assertEqual(settings.reranker_base_url, "")
-        self.assertEqual(settings.retrieval_pool_size, 48)
+        self.assertEqual(settings.retrieval_pool_size, 16)
         self.assertEqual(settings.reranker_top_n, 5)
+        self.assertFalse(settings.final_judge_enabled)
+        self.assertEqual(settings.bot_aliases, ("Mortis", "Motis"))
 
     def test_auto_reply_channel_ids_and_boolean_values(self):
         environment = {
@@ -41,8 +43,10 @@ class SettingsTests(unittest.TestCase):
             "DECISION_LOG_PATH": "/tmp/mortis-decisions.jsonl",
             "RERANKER_BASE_URL": "http://localhost:8083/v1/",
             "RERANKER_MODEL": "qwen3-reranker",
+            "BOT_ALIASES": "Mortis, motis, 小莫",
             "RETRIEVAL_POOL_SIZE": "64",
             "RERANKER_TOP_N": "8",
+            "FINAL_JUDGE_ENABLED": "true",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings.from_env()
@@ -61,8 +65,10 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.reranker_base_url, "http://localhost:8083/v1")
         self.assertEqual(settings.reranker_model, "qwen3-reranker")
+        self.assertEqual(settings.bot_aliases, ("Mortis", "motis", "小莫"))
         self.assertEqual(settings.retrieval_pool_size, 64)
         self.assertEqual(settings.reranker_top_n, 8)
+        self.assertTrue(settings.final_judge_enabled)
 
 
 if __name__ == "__main__":

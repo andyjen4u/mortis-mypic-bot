@@ -11,17 +11,22 @@ Mortis 是一個自架 Discord reaction meme 機器人。它會根據使用者�
 ```text
 Discord 訊息、提及或 /mypic
     ↓
-本地 embedding 模型進行多角度候選檢索
+Gemma 規劃是否插話、反應角色、核心事件詞與反應詞
     ↓
-Qwen3 cross-encoder 將 48 張候選重排，留下最多 5 張可信候選
+本地 embedding 與中文字詞搜尋組成 16 張混合候選
     ↓
-地端聊天模型判斷是否值得插話，並從前 5 張選圖
+Qwen3 cross-encoder 依反應角色做單一路重排
+    ↓
+字幕去重、反應詞候選保留及人物、時態、人稱 grounding filter
+    ↓
+正常模式直接採用角色對應的最高排名；影子評估模式再由 Gemma 判斷哪張適合接話
     ↓
 從本地圖片快取回傳選中的 WebP
 ```
 
-目前候選檢索會從四種方向取樣：
+候選檢索會從五種語意方向及本地中文字詞結果取樣：
 
+- planner 產生的具體反應目標
 - 輕微吐槽或反諷
 - 荒謬反差或故意答非所問
 - 誇張、戲劇化的反應
@@ -36,6 +41,10 @@ Qwen3 cross-encoder 將 48 張候選重排，留下最多 5 張可信候選
 - llama.cpp `/v1/rerank` cross-encoder API
 - OpenAI-compatible chat completions API
 - llama.cpp `thinking_budget_tokens` 與 JSON Schema 輸出
+- 動態字幕搜尋詞、混合檢索、字幕去重及反應詞候選保留
+- 人物、時態與人稱一致性過濾
+- 可選的 Gemma 最終裁判；影子評估固定啟用以比較純 reranker 與語境判斷
+- Planner 原始輸出／校正結果、embedding、檢索、reranker、最終裁判與圖片準備的透明紀錄
 - Discord `/mypic` slash command
 - 同時支援 Guild Install 與 User Install
 - 可在伺服器、Bot 私訊、私人及群組頻道使用
@@ -110,6 +119,22 @@ mortis-data query "今天加班到快死了" \
 GGUF SHA-256 為
 `22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48`。
 
+插話規劃使用 RTX 2070 上的 `Gemma 4 12B IQ4_NL`，並以 `-ngl 99`
+完整 offload 到 GPU；服務範本是
+[`deploy/gemma-planner.service`](deploy/gemma-planner.service)。Bot 的
+planner endpoint drop-in 是
+[`deploy/mortis-bot-planner.conf`](deploy/mortis-bot-planner.conf)，其值放在
+[`deploy/mortis-bot-planner.env`](deploy/mortis-bot-planner.env)，並在主
+環境檔之後載入。`FINAL_JUDGE_ENABLED=false` 會直接採用 reranker 與
+grounding filter 的結果；設為 `true` 才會對每次選圖再呼叫一次 Gemma。
+
+若 embedding 服務因安全需求只監聽 CT102 的 `127.0.0.1:8081`，可啟用
+[`deploy/nemotron-embedding-proxy.socket`](deploy/nemotron-embedding-proxy.socket)
+與
+[`deploy/nemotron-embedding-proxy.service`](deploy/nemotron-embedding-proxy.service)，
+只在 `192.168.10.102:8081` 額外提供 systemd socket proxy 給 CT108，
+不必修改模型本身的 unit。
+
 ## 啟動 Bot
 
 ```bash
@@ -124,7 +149,8 @@ Rocky Linux 等 systemd 環境可參考 [`deploy/`](deploy/) 內的服務範本�
 
 - `always`：每則一般文字訊息都選一張圖。
 - `auto`：模型評估插話時機及候選品質後決定是否回圖。
-- `off`：不監聽普通訊息。
+- `off`：普通訊息仍依照 `auto` 的相同流程完成判斷與記錄，但不顯示輸入
+  狀態，也不向 Discord 傳送圖片。
 - 無論模式為何，提及 Mortis 或使用 `/mypic` 都會強制選圖。
 - Bot 與 Webhook 訊息一律忽略，避免無限回覆。
 - `auto` 模式以頻道為單位套用冷卻時間；提及不受冷卻限制。
@@ -144,6 +170,7 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 ```text
 /mypic-settings status
+/mypic-settings listening state:<開啟監聽|停止監聽>
 /mypic-settings always
 /mypic-settings auto activity:<low|medium|high>
 /mypic-settings off
@@ -151,6 +178,8 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 
 只有 `auto` 模式需要選擇積極度。
 伺服器內按頻道保存，修改需要「管理訊息」權限；私訊則按使用者保存。
+`listening` 是獨立於回圖模式的真正監聽開關。停止後，該頻道的新訊息不會
+進入對話記憶、模型推論或決策紀錄；手動 `/mypic` 仍可使用。
 
 自動讀取一般訊息需要在 Discord Developer Portal 的 Bot 設定中啟用
 **Message Content Intent**。
@@ -166,13 +195,18 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 每筆紀錄包含：
 
 - 使用者原始訊息、最近群聊及 Discord 訊息／頻道識別碼
-- 四個語意檢索查詢
-- 48 張召回候選及 cross-encoder 排序後的前 5 張
+- planner 未經校正的輸出、套用的校正規則，以及最終插話決策、反應角色、
+  核心事件詞與動態字幕搜尋詞
+- 五個語意檢索查詢、中文字詞候選及 16 張混合召回候選
 - 候選字幕、segment ID、語意相似度、檢索角度及 reranker 分數
-- 地端聊天模型最後選擇的候選編號
+- planner 角色選定的單一路 reranker、反應詞保留候選及最終候選編號
 - 模式、積極度、是否被提及、插話門檻結果
 - 模型的 `post`／`stay_silent` 決策、簡短理由、梗圖角色與信心值
-- cross-encoder 分數落差保護是否介入
+- 純 cross-encoder 基準選擇及其字幕、grounding filter 與 Gemma 語境裁判
+  採用的選擇觀點
+- `discord_pending`、`suppressed_off` 等傳送狀態，用來區分正常回圖與
+  `off` 模式下只判斷、不傳送的結果
+- queue、planner、embedding、retrieval、reranker、final judge、圖片準備及總延遲
 - 最後傳送的本機圖片路徑
 
 這是可供稽核的決策摘要，不是模型不可驗證的內部逐步思考。紀錄包含使用者
@@ -184,6 +218,32 @@ AUTO_REPLY_COOLDOWN_SECONDS=10
 ```bash
 tail -n 1 /var/lib/mortis-bot/decisions.jsonl | python -m json.tool
 ```
+
+將最近未傳送的 `off` 模式決策整理成可讀的稽核摘要：
+
+```bash
+mortis-data audit --limit 20 --suppressed-only
+```
+
+人工評分可記在 [`quality/reviews.jsonl`](quality/reviews.jsonl)，分類方式與
+迭代規則見 [`quality/README.md`](quality/README.md)。頻道設定為 `off` 時仍會
+持續累積真實群聊樣本，再以小批次找出重複的錯誤類型；不要針對單一句子或
+特定人名加入硬編碼規則。
+
+## 決策 Dashboard
+
+[`dashboard/`](dashboard/) 提供完整的本地決策檢視器。CT108 上的
+`mortis-dashboard` 服務會直接讀取 `decisions.jsonl`，依訊息逐筆查看：
+
+- 最近群聊、最新訊息及回圖模式
+- Planner 原始輸出、程式校正、反應角色與搜尋詞
+- 語意與字詞召回查詢
+- 每張候選的 semantic、contextual 及 reaction 分數
+- cross-encoder baseline、final judge 與傳送狀態
+- Planner、embedding、retrieval、reranker 等階段耗時
+
+頁面每 30 秒自動更新，也可預覽最後選中的原始圖片。資料只在 CT108 內網與
+使用者瀏覽器之間傳輸，不會上傳或保存在外部服務。
 
 ## Discord 安裝模式
 

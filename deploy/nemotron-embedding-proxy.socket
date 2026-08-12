@@ -1,0 +1,11 @@
+[Unit]
+Description=LAN socket for the local-only Nemotron embedding service
+After=network-online.target
+Wants=network-online.target
+
+[Socket]
+ListenStream=192.168.10.102:8081
+Accept=no
+
+[Install]
+WantedBy=sockets.target

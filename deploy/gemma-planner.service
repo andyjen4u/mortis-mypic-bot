@@ -1,0 +1,20 @@
+[Unit]
+Description=Gemma 4 12B IQ4_NL planner on RTX 2070
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/llama.cpp-bonsai/build/bin/llama-server \
+  -m /opt/models/unsloth/gemma-4-12b-it-GGUF/gemma-4-12b-it-IQ4_NL.gguf \
+  --host 192.168.10.102 --port 8084 \
+  --alias gemma-4-12b-it-IQ4_NL \
+  -c 2048 -ngl 99 -np 1 -b 256 -ub 128
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

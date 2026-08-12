@@ -11,9 +11,12 @@ except ImportError:
 
 from mypic_bot.database import (
     connect,
+    get_message_listening,
     get_reply_policy,
     import_metadata,
     search,
+    search_by_terms,
+    set_message_listening,
     set_reply_policy,
 )
 from mypic_bot.database import store_embeddings
@@ -23,6 +26,22 @@ if np is not None:
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_message_listening_defaults_on_and_persists_per_scope(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "test.sqlite3"
+            connection = connect(path)
+            self.assertTrue(get_message_listening(connection, "channel", 123))
+            set_message_listening(connection, "channel", 123, False)
+            self.assertFalse(get_message_listening(connection, "channel", 123))
+            self.assertTrue(get_message_listening(connection, "channel", 456))
+            connection.close()
+
+            connection = connect(path)
+            self.assertFalse(get_message_listening(connection, "channel", 123))
+            set_message_listening(connection, "channel", 123, True)
+            self.assertTrue(get_message_listening(connection, "channel", 123))
+            connection.close()
+
     def test_reply_policy_is_persistent_per_scope(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "test.sqlite3"
@@ -63,6 +82,96 @@ class DatabaseTests(unittest.TestCase):
             results = search(connection, "什麼也不帶", 5)
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["segment_id"], 6369)
+            connection.close()
+
+    def test_search_by_terms_prioritizes_multiple_matches(self):
+        sample = [
+            {
+                "text": "辛苦了，先休息一下",
+                "season": 1,
+                "episode": 1,
+                "frame_prefer": 10,
+                "segment_id": 1,
+                "character": 0,
+            },
+            {
+                "text": "今天真的很辛苦",
+                "season": 1,
+                "episode": 1,
+                "frame_prefer": 20,
+                "segment_id": 2,
+                "character": 0,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            metadata = root / "data.json"
+            metadata.write_text(
+                json.dumps(sample, ensure_ascii=False), encoding="utf-8"
+            )
+            connection = connect(root / "test.sqlite3")
+            import_metadata(connection, metadata)
+            results = search_by_terms(
+                connection,
+                ["辛苦", "休息", "真的"],
+                limit=5,
+            )
+            self.assertEqual([row["segment_id"] for row in results], [1, 2])
+            self.assertEqual(results[0]["term_matches"], 2)
+            connection.close()
+
+    def test_search_by_terms_filters_noisy_single_characters_and_prefers_short_text(self):
+        sample = [
+            {
+                "text": "今天真的很謝謝妳願意臨時過來幫忙",
+                "season": 1,
+                "episode": 1,
+                "frame_prefer": 10,
+                "segment_id": 1,
+                "character": 0,
+            },
+            {
+                "text": "謝謝大家",
+                "season": 1,
+                "episode": 1,
+                "frame_prefer": 20,
+                "segment_id": 2,
+                "character": 0,
+            },
+            {
+                "text": "好",
+                "season": 1,
+                "episode": 1,
+                "frame_prefer": 30,
+                "segment_id": 3,
+                "character": 0,
+            },
+            {
+                "text": "謝謝大家",
+                "season": 1,
+                "episode": 2,
+                "frame_prefer": 40,
+                "segment_id": 4,
+                "character": 0,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            metadata = root / "data.json"
+            metadata.write_text(
+                json.dumps(sample, ensure_ascii=False), encoding="utf-8"
+            )
+            connection = connect(root / "test.sqlite3")
+            import_metadata(connection, metadata)
+            results = search_by_terms(
+                connection,
+                ["謝", "好", "謝謝"],
+                limit=5,
+            )
+            self.assertEqual(
+                [row["segment_id"] for row in results],
+                [4, 1],
+            )
             connection.close()
 
     @unittest.skipIf(np is None, "NumPy is not installed in the local test runtime")
